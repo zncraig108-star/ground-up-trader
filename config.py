@@ -143,8 +143,8 @@ GENES: Tuple[GeneSpec, ...] = (
     GeneSpec("max_hold_bars", 12.0, 720.0, integer=True),
     GeneSpec("target_leverage", 1.0, 3.0),
     GeneSpec("regime_mode", float(REGIME_EMA), float(REGIME_SUPERTREND), discrete=True),
-    GeneSpec("risk_per_trade_pct", 0.010, 0.080),
-    GeneSpec("trailing_atr_mult", 0.5, 8.0),
+    GeneSpec("risk_per_trade_pct", 0.020, 0.150),
+    GeneSpec("trailing_atr_mult", 1.5, 8.0),
     GeneSpec("funding_filter_z", 0.5, 3.5),
     GeneSpec("volume_filter_z", -1.0, 2.5),
 )

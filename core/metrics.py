@@ -125,15 +125,17 @@ def robust_fitness(sharpe_arr: Any, sortino_arr: Any, max_dd: Any, wfe: Any,
 
     sharpe_pos = xp.maximum(s, 0.0)
     sortino_pos = xp.maximum(so, 0.0)
-    dd_factor = xp.clip(1.0 - dd, 0.0, 1.0)
+    # Lessen drawdown penalty: smooth curve 1.0 / (1.0 + 0.8 * dd) prevents linear cliff
+    # that starves high-growth trend strategies during normal crypto corrections.
+    dd_factor = 1.0 / (1.0 + 0.8 * dd)
     wfe_factor = xp.clip(w, 0.0, 1.5)
 
     raw = xp.sqrt(sharpe_pos * sortino_pos) * dd_factor * wfe_factor
 
-    # Reward massive capital growth when returns are positive
+    # Reward capital growth directly so the GA actively pursues monster returns
     if total_return is not None:
         ret = _sanitize(xp.asarray(total_return, dtype=_FLOAT))
-        return_factor = xp.power(1.0 + xp.maximum(ret, 0.0), 0.6)
+        return_factor = xp.power(1.0 + xp.maximum(ret, 0.0), 0.75)
         raw = raw * return_factor
 
     # Smooth trade-count penalty (NOT a hard cliff).

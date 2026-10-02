@@ -385,12 +385,17 @@ class EvolutionEngine:
             asnumpy(m.sharpe), n_obs, asnumpy(m.trades))), dtype=np.float64)
         shrunk_sortino = np.asarray(asnumpy(sharpe_shrinkage(
             asnumpy(m.sortino), n_obs, asnumpy(m.trades))), dtype=np.float64)
-        dd_factor = np.clip(1.0 - np.asarray(asnumpy(m.max_drawdown)), 0.0, 1.0)
+        # Lessen drawdown penalty: smooth curve prevents linear cliff that starves trend runners
+        dd_val = np.asarray(asnumpy(m.max_drawdown), dtype=np.float64)
+        dd_factor = 1.0 / (1.0 + 0.8 * np.clip(dd_val, 0.0, 1.0))
+        # Reward capital growth directly so the GA actively pursues monster returns
+        ret = np.asarray(asnumpy(m.total_return), dtype=np.float64)
+        ret_factor = np.power(1.0 + np.maximum(ret, 0.0), 0.75)
         trade_factor = (np.minimum(1.0, np.asarray(asnumpy(m.trades), dtype=np.float64)
                                    / max(self.ga.min_trades, 1))
                         ** self.ga.trade_penalty_power)
         fitness = (np.sqrt(np.maximum(shrunk_sharpe, 0.0) * np.maximum(shrunk_sortino, 0.0))
-                   * dd_factor * trade_factor)
+                   * ret_factor * dd_factor * trade_factor)
         m.fitness = xp.asarray(np.nan_to_num(fitness, nan=0.0, posinf=0.0, neginf=0.0))
         return m
 

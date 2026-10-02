@@ -71,8 +71,8 @@ class Genome:
     max_hold_bars: float
     target_leverage: float
     regime_mode: int
-    risk_per_trade_pct: float = 0.015
-    trailing_atr_mult: float = 2.0
+    risk_per_trade_pct: float = 0.05
+    trailing_atr_mult: float = 2.5
     funding_filter_z: float = 2.0
     volume_filter_z: float = 0.0
 
@@ -115,8 +115,8 @@ class Genome:
             max_hold_bars=float(a[8]),
             target_leverage=float(a[9]),
             regime_mode=int(round(a[10])),
-            risk_per_trade_pct=float(a[11]) if len(a) > 11 else 0.015,
-            trailing_atr_mult=float(a[12]) if len(a) > 12 else 2.0,
+            risk_per_trade_pct=float(a[11]) if len(a) > 11 else 0.05,
+            trailing_atr_mult=float(a[12]) if len(a) > 12 else 2.5,
             funding_filter_z=float(a[13]) if len(a) > 13 else 2.0,
             volume_filter_z=float(a[14]) if len(a) > 14 else 0.0,
         )
@@ -273,17 +273,17 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
 
     # --- Chop / Trend Efficiency Ratio (ER) Gate -----------------------------
     # Kaufman Efficiency Ratio = net displacement / total path length over 14 bars.
-    # When ER < 0.20, price is oscillating in low-efficiency sideways chop;
+    # When ER < 0.22, price is oscillating in low-efficiency sideways chop;
     # staying flat avoids false breakouts and preserves capital for real trends.
     k_er = 14
+    er_1d = xp.zeros(n, dtype=xp.float64)
     if n > k_er:
         diffs = xp.abs(close[1:] - close[:-1])
         cumsum_diffs = xp.cumsum(xp.pad(diffs, (1, 0)), axis=0)
         path = cumsum_diffs[k_er:] - cumsum_diffs[:-k_er]
         disp = xp.abs(close[k_er:] - close[:-k_er])
-        er_1d = xp.zeros(n, dtype=xp.float64)
         er_1d[k_er:] = xp.where(path > 1e-12, disp / path, 0.0)
-        chop_mask = er_1d < 0.20
+        chop_mask = er_1d < 0.22
         regime = xp.where(chop_mask[None, :], 0.0, regime)
 
     # --- Volume & Funding gates -----------------------------------------------
@@ -307,11 +307,11 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
     short_entry = (regime < -0.5) & vol_pass_short & short_fund_pass
 
     # --- Entry limits ----------------------------------------------------------
-    # long: buy at close - offset*ATR ; short: sell at close + offset*ATR.
-    # Where filters reject or regime is flat: NaN
+    # In vertical trends (ER >= 0.35), reduce entry offset to 0.15x so we don't miss runaway moves.
+    eff_offset = xp.where(er_1d[None, :] >= 0.35, 0.15 * entry_offset[:, None], entry_offset[:, None])
     entry_price = xp.full((p, n), xp.nan, dtype=xp.float64)
-    entry_price = xp.where(long_entry, close[None, :] - entry_offset[:, None] * atr, entry_price)
-    entry_price = xp.where(short_entry, close[None, :] + entry_offset[:, None] * atr, entry_price)
+    entry_price = xp.where(long_entry, close[None, :] - eff_offset * atr, entry_price)
+    entry_price = xp.where(short_entry, close[None, :] + eff_offset * atr, entry_price)
 
     return SignalIntents(
         regime=regime,
