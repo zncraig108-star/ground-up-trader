@@ -200,7 +200,7 @@ class GAConfig:
     carryover_ratio: float = 0.10  # top fraction carried into the next WFO window
     robustness_jitter: int = 3  # parameter-perturbation samples per admitted candidate
     jitter_sigma: float = 0.02  # jitter sigma as a fraction of each gene's range
-    robustness_min_ratio: float = 0.50  # reject candidates whose jittered median drops below this
+    robustness_min_ratio: float = 0.70  # raised from 0.50: genome must keep 70% fitness after 2% param nudge
     multi_window_slices: int = 3  # contiguous IS sub-windows scored for consistency (1 = off)
     min_trades: int = 3  # trade-count penalty anchor (forwarded to metrics.compute_metrics)
     trade_penalty_power: float = 1.5
@@ -224,11 +224,12 @@ class ChampionValidationConfig:
     validation_step_days: int = 30  # non-overlapping independent periods
     candidates_per_wfo_round: int = 10
     required_periods: int = 6
-    minimum_positive_period_ratio: float = 0.60
+    minimum_positive_period_ratio: float = 0.75  # raised from 0.60: ≥3/4 periods must profit
     minimum_trades_per_period: int = 3
     maximum_trades_per_period: int = 40  # turnover guard: reject over-trading candidates
-    maximum_period_drawdown: float = 0.30
-    minimum_period_sharpe: float = -0.5
+    maximum_period_drawdown: float = 0.25  # tightened from 0.30
+    minimum_period_sharpe: float = 0.10   # raised from -0.5: every period must show skill
+    minimum_period_return: float = -0.05  # new: max -5% per 30d period; stops slow bleeders
     maximum_candidates: int = 100
 
 

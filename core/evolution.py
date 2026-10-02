@@ -748,6 +748,7 @@ class EvolutionEngine:
                 if sharpe_value < policy.minimum_period_sharpe: reasons.append("sharpe")
                 if dd > policy.maximum_period_drawdown: reasons.append("max_drawdown")
                 if trades < policy.minimum_trades_per_period: reasons.append("trades")
+                if total_return < policy.minimum_period_return: reasons.append("return")
                 entry["periods"].append({
                     "start_hour": start, "end_hour": end,
                     "start": str(self.hour_ts[start]), "end": str(self.hour_ts[end - 1]),
