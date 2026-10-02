@@ -328,16 +328,18 @@ class Dashboard:
             else:
                 g_vec = np.zeros((1, 15))
 
-        # 2. Get market data (single calendar year or all-time multi-year)
+        # 2. Get market data (single calendar year, year range, or all-time)
+        from core.data import parse_year_spec
         cfg_data = self.engine.config.data if self.engine else None
         seed = cfg_data.global_seed if cfg_data else 42
-        is_all_time = str(year).lower() in ("all", "all_time", "all-time")
+        y1, y2 = parse_year_spec(year)
+        is_all_time = (y1 is None)
         if is_all_time:
             yd = self._get_all_time_data()
             display_year = "all"
         else:
-            yd = get_or_create_year_data(int(year), source_data=self.market_data, seed=seed, cfg=cfg_data)
-            display_year = int(year)
+            yd = get_or_create_year_data(year, source_data=self.market_data, seed=seed, cfg=cfg_data)
+            display_year = str(y1) if y1 == y2 else f"{y1}-{y2}"
 
         # Enforce strict whole-hour alignment (len(ohlcv_1m) % 60 == 0)
         m_len = (len(yd.ohlcv_1m) // 60) * 60
@@ -422,6 +424,8 @@ class Dashboard:
         end_str = end_dt.strftime("%b %d, %Y")
         if is_all_time:
             title = f"All-Time Evaluation ({start_str} – {end_str})"
+        elif y1 != y2:
+            title = f"{display_year} Multi-Year Backtest ({start_str} – {end_str})"
         else:
             title = f"{display_year} Full-Year Backtest ({start_str} – {end_str})"
 
@@ -430,7 +434,7 @@ class Dashboard:
             "is_all_time": is_all_time,
             "title": title,
             "training_year": self.training_year,
-            "is_out_of_distribution": (self.training_year is not None and not is_all_time and int(display_year) != int(self.training_year)),
+            "is_out_of_distribution": (self.training_year is not None and not is_all_time and str(display_year) != str(self.training_year)),
             "genome_id": gid,
             "metrics": {
                 "total_return": tot_ret,

@@ -257,15 +257,21 @@ def _check_fitness() -> None:
 
 def _check_no_lookahead_end_to_end(inst: InstrumentSpec, sd) -> None:
     """Backtest-level: perturbing the last 1m bar leaves earlier equity unchanged."""
-    feat = SignalFeatures(sd.ohlcv_1h["open"].to_numpy(), sd.ohlcv_1h["high"].to_numpy(),
-                          sd.ohlcv_1h["low"].to_numpy(), sd.ohlcv_1h["close"].to_numpy())
+    # Bounded slice keeps causality self-check fast even when sd spans multiple years
+    h_len = min(len(sd.ohlcv_1h), 240)
+    m_len = h_len * 60
+    m1 = sd.ohlcv_1m.iloc[:m_len]
+    h1 = sd.ohlcv_1h.iloc[:h_len]
+    fund = sd.funding.iloc[:h_len]
+    feat = SignalFeatures(h1["open"].to_numpy(), h1["high"].to_numpy(),
+                          h1["low"].to_numpy(), h1["close"].to_numpy())
     pop = random_population(np.random.default_rng(0), 4)
     sig = compute_signals(feat, pop)
-    r1 = backtest(sd.ohlcv_1m, sd.ohlcv_1h, sd.funding, sig, pop, inst)
-    df2 = sd.ohlcv_1m.copy()
+    r1 = backtest(m1, h1, fund, sig, pop, inst)
+    df2 = m1.copy()
     df2.loc[df2.index[-1], ["open", "high", "low", "close"]] = df2.loc[df2.index[-1], "close"] * 10.0
-    r2 = backtest(df2, sd.ohlcv_1h, sd.funding, sig, pop, inst)
-    assert_no_lookahead(r1.equity_curve, r2.equity_curve, cutoff=sd.ohlcv_1m.shape[0] - 1)
+    r2 = backtest(df2, h1, fund, sig, pop, inst)
+    assert_no_lookahead(r1.equity_curve, r2.equity_curve, cutoff=m_len - 1)
     print("  [ok] end-to-end no-lookahead (future-bar perturbation)")
 
 
@@ -560,7 +566,8 @@ async def _paper_run(cfg, inst, genome, feed) -> tuple:
 # ---------------------------------------------------------------------------
 
 def build_demo_config(args: argparse.Namespace):
-    import calendar
+    from core.data import parse_year_spec
+    import datetime
     cfg = build_config()
     # Walk-forward window sizes. Explicit flags win; otherwise auto-scale so short runs
     # still produce several slices. Number of windows =
@@ -568,14 +575,23 @@ def build_demo_config(args: argparse.Namespace):
     d = max(3, args.days)
     synth_start = cfg.data.synth_start
     if args.year is not None:
-        import datetime
-        now_dt = datetime.datetime.now(datetime.timezone.utc)
-        if args.year == now_dt.year:
-            d_year = max(30, (now_dt - datetime.datetime(args.year, 1, 1, tzinfo=datetime.timezone.utc)).days)
+        y1, y2 = parse_year_spec(args.year)
+        if y1 is None:
+            now_dt = datetime.datetime.now(datetime.timezone.utc)
+            d_years = max(365, (now_dt - datetime.datetime(2021, 1, 1, tzinfo=datetime.timezone.utc)).days)
+            d = args.days if (args.days is not None and args.days != 35) else d_years
+            synth_start = "2021-01-01T00:00:00Z"
         else:
-            d_year = 366 if calendar.isleap(args.year) else 365
-        d = args.days if (args.days is not None and args.days != 35) else d_year
-        synth_start = f"{args.year}-01-01T00:00:00Z"
+            now_dt = datetime.datetime.now(datetime.timezone.utc)
+            end_year = min(y2, now_dt.year)
+            start_dt = datetime.datetime(y1, 1, 1, tzinfo=datetime.timezone.utc)
+            if end_year == now_dt.year:
+                end_dt = now_dt
+            else:
+                end_dt = datetime.datetime(end_year + 1, 1, 1, tzinfo=datetime.timezone.utc)
+            d_years = max(30, (end_dt - start_dt).days)
+            d = args.days if (args.days is not None and args.days != 35) else d_years
+            synth_start = f"{y1}-01-01T00:00:00Z"
     oos_days = args.oos_days if args.oos_days else min(5, max(1, d // 10))
     step_days = args.step_days if args.step_days else oos_days
     if args.is_days:
@@ -585,7 +601,7 @@ def build_demo_config(args: argparse.Namespace):
         is_days = min(20, max(3, d - oos_days - 3 * step_days))
     cfg = dataclasses.replace(
         cfg,
-        data=dataclasses.replace(cfg.data, synth_days=d, synth_start=synth_start, train_year=args.year),
+        data=dataclasses.replace(cfg.data, synth_days=d, synth_start=synth_start, train_year=str(args.year) if args.year is not None else None),
         wfo=dataclasses.replace(
             cfg.wfo, is_days=is_days, oos_days=oos_days, step_days=step_days,
             generations_per_window=args.generations_per_window
@@ -602,8 +618,8 @@ def build_demo_config(args: argparse.Namespace):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="SOL-PERP Evolutionary Trading System demo")
-    ap.add_argument("--year", type=int, default=None,
-                    help="calendar year to train on (e.g. 2024; defaults to 2024 for real data; pass --all-time for all history)")
+    ap.add_argument("--year", default=None,
+                    help="calendar year, range (e.g. 2022-2024), or 'all' to train on; defaults to 2024 for real data")
     ap.add_argument("--all-time", dest="all_time", action="store_true",
                     help="train across all available history instead of a single calendar year")
     ap.add_argument("--days", type=int, default=35, help="synthetic history length (days)")
@@ -637,9 +653,9 @@ def main() -> int:
     if args.cycles is not None:
         args.walk_forward = True
     if args.all_time:
-        args.year = None
+        args.year = "all"
     elif args.year is None and args.data:
-        args.year = 2024
+        args.year = "2024"
     if args.download:
         import os
         from scripts.download_data import download_all

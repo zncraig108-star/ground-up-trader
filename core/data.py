@@ -48,6 +48,7 @@ __all__ = [
     "data_manifest",
     "fetch_coinbase",
     "make_synthetic",
+    "parse_year_spec",
     "slice_year",
     "available_years_for_data",
     "get_or_create_year_data",
@@ -565,26 +566,67 @@ def make_synthetic(seed: int, days: Optional[int] = None,
     return SyntheticData(ohlcv_1m=ohlcv_1m, ohlcv_1h=ohlcv_1h, funding=funding)
 
 
-def slice_year(data: SyntheticData, year: int) -> SyntheticData:
-    """Slice a SyntheticData bundle to a specific calendar year.
+def parse_year_spec(year: Any) -> tuple[Optional[int], Optional[int]]:
+    """Parse a year specification into (start_year, end_year).
+
+    Returns (None, None) for all-time.
+    Supports:
+        - int: 2024 -> (2024, 2024)
+        - str: "2024" -> (2024, 2024)
+        - str range: "2022-2024", "2021:2025", "2022..2024" -> (2022, 2024)
+        - all-time: "all", "all-time", "all_time", None -> (None, None)
+        - tuple: (2022, 2024) -> (2022, 2024)
+    """
+    if year is None:
+        return None, None
+    if isinstance(year, (tuple, list)):
+        return (int(year[0]), int(year[1]))
+    s = str(year).strip().lower()
+    if s in ("all", "all-time", "all_time", "alltime", "none", "*"):
+        return None, None
+    for sep in ("-", ":", ".."):
+        if sep in s:
+            parts = s.split(sep, 1)
+            y1 = int(parts[0].strip())
+            y2 = int(parts[1].strip())
+            return (min(y1, y2), max(y1, y2))
+    y = int(s)
+    return (y, y)
+
+
+def slice_year(data: SyntheticData, year: Any) -> SyntheticData:
+    """Slice a SyntheticData bundle to a specific calendar year, year range, or all-time.
 
     Guarantees that the returned 1m bars cleanly align to completed 1h signal bars
     so that len(ohlcv_1m) % 60 == 0 always holds.
 
     Raises:
-        ValueError: if no 1m bars fall into the requested year.
+        ValueError: if no 1m bars fall into the requested year/range.
     """
-    start_str = f"{year}-01-01 00:00:00"
-    end_str = f"{year + 1}-01-01 00:00:00"
+    y1, y2 = parse_year_spec(year)
+    if y1 is None:
+        m_len = (len(data.ohlcv_1m) // 60) * 60
+        if m_len == len(data.ohlcv_1m):
+            return data
+        m1 = data.ohlcv_1m.iloc[:m_len]
+        h_len = m_len // 60
+        h1 = data.ohlcv_1h.iloc[:h_len] if len(data.ohlcv_1h) >= h_len else _resample_signals(m1, "1h")
+        fund = data.funding.reindex(h1.index).ffill().fillna(0.0)
+        return SyntheticData(ohlcv_1m=m1, ohlcv_1h=h1, funding=fund)
+
+    start_str = f"{y1}-01-01 00:00:00"
+    end_str = f"{y2 + 1}-01-01 00:00:00"
     m1 = data.ohlcv_1m.loc[start_str:end_str]
     if len(m1) == 0:
         years = sorted(list(set(data.ohlcv_1m.index.year)))
+        req = f"{y1}" if y1 == y2 else f"{y1}-{y2}"
         raise ValueError(
-            f"Year {year} has no data in the dataset. Available years: {years}")
+            f"Year specification '{req}' has no data in the dataset. Available years: {years}")
 
     m_len = (len(m1) // 60) * 60
     if m_len == 0:
-        raise ValueError(f"Year {year} has fewer than 60 1m bars ({len(m1)} bars)")
+        req = f"{y1}" if y1 == y2 else f"{y1}-{y2}"
+        raise ValueError(f"Year specification '{req}' has fewer than 60 1m bars ({len(m1)} bars)")
     m1 = m1.iloc[:m_len]
     h_len = m_len // 60
 
@@ -607,25 +649,29 @@ def available_years_for_data(data: Optional[SyntheticData] = None) -> list[int]:
 
 
 def get_or_create_year_data(
-    year: int,
+    year: Any,
     source_data: Optional[SyntheticData] = None,
     seed: int = 42,
     cfg: Optional[DataConfig] = None,
 ) -> SyntheticData:
-    """Return full calendar-year market data for backtesting.
+    """Return full market data for a calendar year, year range, or all-time for backtesting.
 
-    If source_data has data spanning this year (at least 180 days), returns that slice.
+    If source_data has data spanning this year/range, returns that slice.
     Checks data/sol_1m.parquet on disk if source_data is not provided or insufficient.
-    Otherwise generates a deterministic full-year (or elapsed-year) synthetic bundle.
+    Otherwise generates a deterministic synthetic bundle covering the requested timeframe.
     """
-    import calendar
     import datetime
+
+    y1, y2 = parse_year_spec(year)
+    if y1 is None:
+        return get_or_create_all_time_data(source_data=source_data, seed=seed, cfg=cfg)
 
     # 1. Check in-memory source_data
     if source_data is not None and len(source_data.ohlcv_1m) > 0:
         try:
-            sliced = slice_year(source_data, year)
-            if len(sliced.ohlcv_1m) >= 180 * 1440 or (year == 2026 and len(sliced.ohlcv_1m) >= 30 * 1440):
+            sliced = slice_year(source_data, (y1, y2) if y1 != y2 else y1)
+            min_days = 30 if y1 == 2026 else (180 if y1 == y2 else 180 * (y2 - y1 + 1))
+            if len(sliced.ohlcv_1m) >= min_days * 1440:
                 return sliced
         except ValueError:
             pass
@@ -636,20 +682,24 @@ def get_or_create_year_data(
         try:
             funding_path = os.path.join("data", "sol_funding.parquet")
             disk_data = load_market_data(parquet_path, funding_path if os.path.exists(funding_path) else None)
-            sliced = slice_year(disk_data, year)
-            if len(sliced.ohlcv_1m) >= 180 * 1440 or (year == 2026 and len(sliced.ohlcv_1m) >= 30 * 1440):
+            sliced = slice_year(disk_data, (y1, y2) if y1 != y2 else y1)
+            min_days = 30 if y1 == 2026 else (180 if y1 == y2 else 180 * (y2 - y1 + 1))
+            if len(sliced.ohlcv_1m) >= min_days * 1440:
                 return sliced
         except Exception:
             pass
 
     # 3. Generate deterministic synthetic data
     now_dt = datetime.datetime.now(datetime.timezone.utc)
-    if year == now_dt.year:
-        days = max(30, (now_dt - datetime.datetime(year, 1, 1, tzinfo=datetime.timezone.utc)).days)
+    end_year = min(y2, now_dt.year)
+    start_dt = datetime.datetime(y1, 1, 1, tzinfo=datetime.timezone.utc)
+    if end_year == now_dt.year:
+        end_dt = now_dt
     else:
-        days = 366 if calendar.isleap(year) else 365
-    start = f"{year}-01-01T00:00:00Z"
-    return make_synthetic(seed=seed + year, days=days, start=start, cfg=cfg)
+        end_dt = datetime.datetime(end_year + 1, 1, 1, tzinfo=datetime.timezone.utc)
+    days = max(30, (end_dt - start_dt).days)
+    start = f"{y1}-01-01T00:00:00Z"
+    return make_synthetic(seed=seed + y1, days=days, start=start, cfg=cfg)
 
 
 def get_or_create_all_time_data(
