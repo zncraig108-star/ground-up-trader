@@ -418,11 +418,17 @@ def backtest(
 
             # A. time stop (close at market close, taker). Measured from the fill bar
             # (base/pessimistic) or the signal bar (optimistic legacy).
+            # Profit-protected runners: trades that reached +1.0 ATR favorable excursion and have
+            # active trailing stops are allowed to run with the trend, rather than being cut short.
             if fm.max_hold_from_fill:
                 ref_hour = xp.floor_divide(sim.entry_bar, bars_per_hour)
             else:
                 ref_hour = sim.entry_sig
-            time_exit = (sim.pos != 0) & (sim.entry_sig >= 0) & \
+            in_profit = (sim.pos_trail > 0.0) & (
+                ((sim.pos > 0) & (sim.peak_px >= sim.entry_px + sim.pos_atr)) |
+                ((sim.pos < 0) & (sim.peak_px <= sim.entry_px - sim.pos_atr))
+            )
+            time_exit = (sim.pos != 0) & (sim.entry_sig >= 0) & ~in_profit & \
                 ((xp.full(p, h_idx, dtype=_INT) - ref_hour) >= max_hold)
             if bool(asnumpy(xp.any(time_exit))):
                 time_fill = xp.where(sim.pos > 0, c - slip_taker, c + slip_taker)

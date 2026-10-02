@@ -271,6 +271,21 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
     is_ema = (mode == REGIME_EMA)[:, None]  # (P, 1)
     regime = xp.where(is_ema, ema_regime, st_regime)  # (P, N) float
 
+    # --- Chop / Trend Efficiency Ratio (ER) Gate -----------------------------
+    # Kaufman Efficiency Ratio = net displacement / total path length over 14 bars.
+    # When ER < 0.20, price is oscillating in low-efficiency sideways chop;
+    # staying flat avoids false breakouts and preserves capital for real trends.
+    k_er = 14
+    if n > k_er:
+        diffs = xp.abs(close[1:] - close[:-1])
+        cumsum_diffs = xp.cumsum(xp.pad(diffs, (1, 0)), axis=0)
+        path = cumsum_diffs[k_er:] - cumsum_diffs[:-k_er]
+        disp = xp.abs(close[k_er:] - close[:-k_er])
+        er_1d = xp.zeros(n, dtype=xp.float64)
+        er_1d[k_er:] = xp.where(path > 1e-12, disp / path, 0.0)
+        chop_mask = er_1d < 0.20
+        regime = xp.where(chop_mask[None, :], 0.0, regime)
+
     # --- Volume & Funding gates -----------------------------------------------
     vol_z = xp.zeros(n, dtype=xp.float64) if features.volume_zscore is None else xp.nan_to_num(xp.asarray(features.volume_zscore, dtype=xp.float64), nan=0.0)
     fund_z = xp.zeros(n, dtype=xp.float64) if features.funding_zscore is None else xp.nan_to_num(xp.asarray(features.funding_zscore, dtype=xp.float64), nan=0.0)
@@ -278,12 +293,18 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
     vol_gate = g[:, GENE_INDEX["volume_filter_z"]]
     fund_gate = g[:, GENE_INDEX["funding_filter_z"]]
 
-    vol_pass = vol_z[None, :] >= vol_gate[:, None]
+    # Extreme opposite funding (crowded counter-parties) provides squeeze fuel,
+    # lowering volume hurdles for high-conviction breakout setups.
+    long_squeeze = fund_z[None, :] < -1.5
+    short_squeeze = fund_z[None, :] > 1.5
+    vol_pass_long = (vol_z[None, :] >= vol_gate[:, None]) | long_squeeze
+    vol_pass_short = (vol_z[None, :] >= vol_gate[:, None]) | short_squeeze
+
     long_fund_pass = fund_z[None, :] <= fund_gate[:, None]
     short_fund_pass = fund_z[None, :] >= -fund_gate[:, None]
 
-    long_entry = (regime > 0.5) & vol_pass & long_fund_pass
-    short_entry = (regime < -0.5) & vol_pass & short_fund_pass
+    long_entry = (regime > 0.5) & vol_pass_long & long_fund_pass
+    short_entry = (regime < -0.5) & vol_pass_short & short_fund_pass
 
     # --- Entry limits ----------------------------------------------------------
     # long: buy at close - offset*ATR ; short: sell at close + offset*ATR.

@@ -113,10 +113,16 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                 if h_idx >= 1 and pos != 0.0:
                     cash -= pos * cc * fund_rate[h_idx - 1]
                     total_funding[pi] += pos * cc * fund_rate[h_idx - 1]
-                # time stop (taker close at the bar close)
+                # time stop (taker close at the bar close).
+                # Profit-protected runners: trades that reached +1.0 ATR favorable excursion and have
+                # active trailing stops are allowed to run with the trend.
                 if pos != 0.0 and entry_sig >= 0:
+                    in_profit = (trail_mult[pi] > 0.0) and (
+                        (pos > 0.0 and peak_px >= entry_px + pos_atr) or
+                        (pos < 0.0 and peak_px <= entry_px - pos_atr)
+                    )
                     ref = entry_fill_hour if max_hold_from_fill else entry_sig
-                    if ref >= 0 and (h_idx - ref) >= mh:
+                    if not in_profit and ref >= 0 and (h_idx - ref) >= mh:
                         if pos > 0.0:
                             fill = cc - slip_taker
                         else:
