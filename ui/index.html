@@ -528,7 +528,7 @@
               { label: "SOL Full History", data: [], borderColor: "#a78bfa",
                 borderDash: [2, 3], pointRadius: 0, borderWidth: 1.1, tension: 0.15 },
            ] },
-          options: { responsive: true, maintainAspectRatio: false, animation: { duration: 120 },
+          options: { responsive: true, maintainAspectRatio: false, animation: false,
             scales: makeAxisOpts(), plugins: { legend: { labels: { color: "#cbd5e1", font: { size: 10 }, boxWidth: 12 } } } },
         });
       }
@@ -540,7 +540,7 @@
             { label: "Out-of-Sample (Test)", data: [], borderColor: "#fbbf24", backgroundColor: "rgba(251,191,36,0.05)", pointRadius: 0, borderWidth: 1.5, tension: 0.2 },
             { label: "SOL Benchmark (Window)", data: [], borderColor: "#94a3b8", borderDash: [4, 4], pointRadius: 0, borderWidth: 1.2, tension: 0.15 },
           ]},
-          options: { responsive: true, maintainAspectRatio: false, animation: { duration: 120 },
+          options: { responsive: true, maintainAspectRatio: false, animation: false,
             scales: makeAxisOpts(), plugins: { legend: { labels: { color: "#cbd5e1", font: { size: 10 }, boxWidth: 12 } } } },
         });
       }
@@ -623,7 +623,7 @@
           s.champion_status ? s.champion_status : null,
         ].filter(Boolean);
         document.getElementById("agg-note").textContent = metadata.length ? `(${metadata.join(" · ")})` : "";
-        totalChart.update();
+        totalChart.update('none');
       }
 
       renderChampionValidation(s);
@@ -654,7 +654,7 @@
       document.getElementById("window-note").textContent = activeSlice
         ? `OOS ${dateRange(activeSlice.oos_start, activeSlice.oos_end)} · Winner: ${activeSlice.champion_id ?? "pending"} (Sharpe ${fmt(activeSlice.sharpe, 2)})`
         : `Current optimization window; evaluating population genomes.`;
-      windowChart.update();
+      windowChart.update('none');
 
       // Render tab tables
       renderWindowBoard(wb, activeIndex);
@@ -840,7 +840,7 @@
         if (chart._drawn && complete) return;
         chart.data.datasets[0].data = (sl.curve || []).map(([t, v]) => ({ x: t, y: v }));
         chart.data.datasets[0].borderColor = color;
-        chart.update();
+        chart.update('none');
         if (complete) chart._drawn = true;
       });
       sliceCharts.forEach((chart, idx) => {
@@ -1233,12 +1233,39 @@
           : ((cov.start && cov.end) ? ` · ${cov.start.slice(0, 10)} to ${cov.end.slice(0, 10)}` : "");
         document.getElementById("agg-note").textContent = 
           `Candidate ${result.genome_id} · ${result.candle_count.toLocaleString()} bars${rangeText}`;
-        totalChart.update();
+        totalChart.update('none');
       } catch (err) {
         console.error("Year backtest failed:", err);
         alert(`Failed to load ${year} backtest: ` + err.message);
       } finally {
         if (loading) loading.classList.add("hidden");
+      }
+    }
+
+    let pendingSnapshot = null;
+    let pendingProgress = null;
+    let renderScheduled = false;
+    let lastPoolCheck = 0;
+    let lastPoolSize = -1;
+
+    function flushRender() {
+      renderScheduled = false;
+      if (pendingProgress) {
+        renderProgress(pendingProgress);
+        pendingProgress = null;
+      }
+      if (pendingSnapshot) {
+        const s = pendingSnapshot;
+        pendingSnapshot = null;
+        render(s);
+        const now = Date.now();
+        const pSize = s.deployment_pool_size ?? 0;
+        if (pSize !== lastPoolSize || now - lastPoolCheck > 2000) {
+          lastPoolCheck = now;
+          lastPoolSize = pSize;
+          loadPool();
+          loadExecutor();
+        }
       }
     }
 
@@ -1248,13 +1275,22 @@
       ws.onopen = () => { document.getElementById("conn-status").className = "w-2 h-2 rounded-full bg-emerald-500 ml-1 flex-shrink-0"; retryDelay = 1000; loadPool(); loadExecutor(); };
       ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data);
-        if (msg.type === "progress") { renderProgress(msg.data); return; }
+        if (msg.type === "progress") {
+          pendingProgress = msg.data;
+          if (!renderScheduled) {
+            renderScheduled = true;
+            requestAnimationFrame(flushRender);
+          }
+          return;
+        }
         if (msg.type === "lifecycle") { renderLifecycle(msg.data || {}); return; }
         if (msg.type === "executor") { renderExecutor(msg.data || {}); return; }
         if (msg.type === "snapshot") {
-          render(msg.data || {});
-          loadPool();
-          loadExecutor();
+          pendingSnapshot = msg.data || {};
+          if (!renderScheduled) {
+            renderScheduled = true;
+            requestAnimationFrame(flushRender);
+          }
         }
       };
       ws.onclose = () => {

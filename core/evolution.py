@@ -221,7 +221,7 @@ class EvolutionEngine:
         # Optional progress sink (set by the UI). ``_emit`` is time-throttled.
         self.progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None
         self._last_emit: float = 0.0
-        self.progress_interval_s: float = 1.0 / 60.0  # ~60 updates/sec ("60fps-like")
+        self.progress_interval_s: float = 0.10  # 10 updates/sec max (prevents UI queue flooding)
         self._progress_every = 0
         self._last_persist: float = 0.0
 
