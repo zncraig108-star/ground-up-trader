@@ -531,6 +531,7 @@ class EvolutionEngine:
         key = win.is_h0
         ts = self.hour_ts[win.is_h1:win.oos_h1]
         gid = _genome_id(self.population[best_idx])
+        self._spliced_cache = None
         self.oos_segments[key] = {
             "timestamps": [int(t.value // 10**6) for t in ts],
             "equity": [float(v) for v in oos_equity],
@@ -639,6 +640,15 @@ class EvolutionEngine:
         self._window_leaderboard.clear()
         self._evaluate_forward_validation()
 
+    def _get_candidate_signals(self, entry: Dict[str, Any]) -> SignalIntents:
+        gid = entry["id"]
+        sig = self._validation_signal_cache.get(gid)
+        if sig is None:
+            vec = np.asarray(entry["genome"], dtype=np.float64)[None, :]
+            sig = compute_signals(self.features, vec)
+            self._validation_signal_cache[gid] = sig
+        return sig
+
     def _evaluate_forward_validation(self) -> None:
         """Evaluate only complete anchored periods whose start is after discovery."""
         policy = self.config.champion_validation
@@ -665,16 +675,20 @@ class EvolutionEngine:
         old_status = self.run_status
         if jobs:
             self.run_status = "validating"
-        for start, entries in jobs.items():
+        for start, raw_entries in jobs.items():
+            entries = [e for e in raw_entries if e.get("status") != "rejected"]
+            if not entries:
+                continue
             end = start + period_hours
             genome = np.asarray([e["genome"] for e in entries], dtype=np.float64)
+            entry_sigs = [self._get_candidate_signals(e) for e in entries]
             # Each candidate's cached full-history signals is sliced, then backtested together.
             signals = SignalIntents(
-                regime=xp.concatenate([self._validation_signal_cache[e["id"]].regime for e in entries]),
-                atr=xp.concatenate([self._validation_signal_cache[e["id"]].atr for e in entries]),
-                long_entry=xp.concatenate([self._validation_signal_cache[e["id"]].long_entry for e in entries]),
-                short_entry=xp.concatenate([self._validation_signal_cache[e["id"]].short_entry for e in entries]),
-                entry_price=xp.concatenate([self._validation_signal_cache[e["id"]].entry_price for e in entries]),
+                regime=xp.concatenate([s.regime for s in entry_sigs]),
+                atr=xp.concatenate([s.atr for s in entry_sigs]),
+                long_entry=xp.concatenate([s.long_entry for s in entry_sigs]),
+                short_entry=xp.concatenate([s.short_entry for s in entry_sigs]),
+                entry_price=xp.concatenate([s.entry_price for s in entry_sigs]),
             )
             sig = self._slice_signals(signals, np.arange(len(entries)), start, end)
             res = backtest(self.ohlcv_1m.iloc[start * 60:end * 60], self.ohlcv_1h.iloc[start:end],
@@ -771,7 +785,7 @@ class EvolutionEngine:
         if entry is not None:
             genome_vec = np.asarray(entry["genome"], dtype=np.float64)
             gid = str(entry["id"])
-            signals = self._validation_signal_cache.get(gid)
+            signals = self._get_candidate_signals(entry)
         elif self.best_is_genome is not None:
             # No validated champion yet: check whatever the demo/executor would deploy
             # (the best in-sample genome) so the holdout is still reported.
@@ -921,10 +935,7 @@ class EvolutionEngine:
         """
         gid = entry["id"]
         curves = self._validation_curves.setdefault(gid, {})
-        signals = self._validation_signal_cache.get(gid)
-        if signals is None:
-            signals = compute_signals(self.features, np.asarray(entry["genome"], dtype=np.float64)[None, :])
-            self._validation_signal_cache[gid] = signals
+        signals = self._get_candidate_signals(entry)
         genome = np.asarray(entry["genome"], dtype=np.float64)[None, :]
         # Ensure pre-discovery period (0 to discovery_end_hour) is evaluated so the curve starts at t=0
         disc_end = int(entry.get("discovery_end_hour", 0))
