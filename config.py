@@ -147,6 +147,7 @@ GENES: Tuple[GeneSpec, ...] = (
     GeneSpec("trailing_atr_mult", 1.5, 10.0),
     GeneSpec("funding_filter_z", 0.5, 3.5),
     GeneSpec("volume_filter_z", -1.0, 2.5),
+    GeneSpec("er_threshold", 0.15, 0.65),
 )
 
 GENE_NAMES: Tuple[str, ...] = tuple(g.name for g in GENES)
@@ -201,7 +202,7 @@ class GAConfig:
     jitter_sigma: float = 0.02  # jitter sigma as a fraction of each gene's range
     robustness_min_ratio: float = 0.50  # reject candidates whose jittered median drops below this
     multi_window_slices: int = 3  # contiguous IS sub-windows scored for consistency (1 = off)
-    min_trades: int = 10  # trade-count penalty anchor (forwarded to metrics.compute_metrics)
+    min_trades: int = 3  # trade-count penalty anchor (forwarded to metrics.compute_metrics)
     trade_penalty_power: float = 1.5
     oos_candidates: int = 10  # top-N genomes scored on OOS each generation
     use_numba: bool = True  # use the Numba-JIT multithreaded CPU backtester when available
@@ -224,8 +225,8 @@ class ChampionValidationConfig:
     candidates_per_wfo_round: int = 10
     required_periods: int = 6
     minimum_positive_period_ratio: float = 0.60
-    minimum_trades_per_period: int = 10
-    maximum_trades_per_period: int = 80  # turnover guard: reject over-trading candidates
+    minimum_trades_per_period: int = 3
+    maximum_trades_per_period: int = 40  # turnover guard: reject over-trading candidates
     maximum_period_drawdown: float = 0.30
     minimum_period_sharpe: float = -0.5
     maximum_candidates: int = 100

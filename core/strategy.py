@@ -75,6 +75,7 @@ class Genome:
     trailing_atr_mult: float = 2.5
     funding_filter_z: float = 2.0
     volume_filter_z: float = 0.0
+    er_threshold: float = 0.35
 
     def encode(self) -> np.ndarray:
         """Encode to a flat float64 array in canonical gene order."""
@@ -95,6 +96,7 @@ class Genome:
                 self.trailing_atr_mult,
                 self.funding_filter_z,
                 self.volume_filter_z,
+                self.er_threshold,
             ],
             dtype=np.float64,
         )
@@ -119,6 +121,7 @@ class Genome:
             trailing_atr_mult=float(a[12]) if len(a) > 12 else 2.5,
             funding_filter_z=float(a[13]) if len(a) > 13 else 2.0,
             volume_filter_z=float(a[14]) if len(a) > 14 else 0.0,
+            er_threshold=float(a[15]) if len(a) > 15 else 0.35,
         )
 
 
@@ -279,8 +282,7 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
 
     # --- Chop / Trend Efficiency Ratio (ER) Gate -----------------------------
     # Kaufman Efficiency Ratio = net displacement / total path length over 14 bars.
-    # When ER < 0.22, price is oscillating in low-efficiency sideways chop;
-    # staying flat avoids false breakouts and preserves capital for real trends.
+    # Genomes evolve their own efficiency hurdle (er_threshold) to stay flat during chop.
     k_er = max(2, int(round(14 * tf_scale)))
     er_1d = xp.zeros(n, dtype=xp.float64)
     if n > k_er:
@@ -289,8 +291,10 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
         path = cumsum_diffs[k_er:] - cumsum_diffs[:-k_er]
         disp = xp.abs(close[k_er:] - close[:-k_er])
         er_1d[k_er:] = xp.where(path > 1e-12, disp / path, 0.0)
-        chop_mask = er_1d < 0.22
-        regime = xp.where(chop_mask[None, :], 0.0, regime)
+
+    er_gate = g[:, GENE_INDEX["er_threshold"]]
+    chop_mask = er_1d[None, :] < er_gate[:, None]
+    regime = xp.where(chop_mask, 0.0, regime)
 
     # --- Volume & Funding gates -----------------------------------------------
     vol_z = xp.zeros(n, dtype=xp.float64) if features.volume_zscore is None else xp.nan_to_num(xp.asarray(features.volume_zscore, dtype=xp.float64), nan=0.0)
@@ -313,9 +317,9 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
     short_entry = (regime < -0.5) & vol_pass_short & short_fund_pass
 
     # --- Entry limits & Breakout Stops ---------------------------------------
-    # In vertical trends (ER >= 0.35) or short/long squeeze fuel, switch to high-velocity
+    # In vertical trends (ER >= er_gate) or short/long squeeze fuel, switch to high-velocity
     # breakout stop orders to capture runaway legs without waiting for pullbacks.
-    is_breakout = xp.broadcast_to((er_1d[None, :] >= 0.35) | long_squeeze | short_squeeze, (p, n))
+    is_breakout = (er_1d[None, :] >= xp.maximum(0.35, er_gate[:, None])) | long_squeeze | short_squeeze
     breakout_px = xp.full((p, n), xp.nan, dtype=xp.float64)
     breakout_px = xp.where(long_entry & is_breakout, close[None, :] + 0.15 * atr, breakout_px)
     breakout_px = xp.where(short_entry & is_breakout, close[None, :] - 0.15 * atr, breakout_px)

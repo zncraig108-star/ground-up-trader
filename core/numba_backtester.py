@@ -256,7 +256,7 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                             be_sl = entry_px + (maker_rate + taker_rate) * entry_px + tick
                             if be_sl > sl_px:
                                 sl_px = be_sl
-                        if trailp > 0.0 and pos_atr > 0.0:
+                        if trailp > 0.0 and pos_atr > 0.0 and peak_px >= entry_px + 1.5 * pos_atr:
                             trail_sl = peak_px - trailp * pos_atr
                             if trail_sl > sl_px:
                                 sl_px = trail_sl
@@ -267,7 +267,7 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                             be_sl = entry_px - (maker_rate + taker_rate) * entry_px - tick
                             if be_sl < sl_px:
                                 sl_px = be_sl
-                        if trailp > 0.0 and pos_atr > 0.0:
+                        if trailp > 0.0 and pos_atr > 0.0 and peak_px <= entry_px - 1.5 * pos_atr:
                             trail_sl = peak_px + trailp * pos_atr
                             if trail_sl < sl_px:
                                 sl_px = trail_sl
@@ -389,7 +389,7 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                             be_sl = entry_px + (maker_rate + taker_rate) * entry_px + tick
                             if be_sl > sl_px:
                                 sl_px = be_sl
-                        if trailp > 0.0 and pos_atr > 0.0:
+                        if trailp > 0.0 and pos_atr > 0.0 and peak_px >= entry_px + 1.5 * pos_atr:
                             trail_sl = peak_px - trailp * pos_atr
                             if trail_sl > sl_px:
                                 sl_px = trail_sl
@@ -400,7 +400,7 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                             be_sl = entry_px - (maker_rate + taker_rate) * entry_px - tick
                             if be_sl < sl_px:
                                 sl_px = be_sl
-                        if trailp > 0.0 and pos_atr > 0.0:
+                        if trailp > 0.0 and pos_atr > 0.0 and peak_px <= entry_px - 1.5 * pos_atr:
                             trail_sl = peak_px + trailp * pos_atr
                             if trail_sl < sl_px:
                                 sl_px = trail_sl

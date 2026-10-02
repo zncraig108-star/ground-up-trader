@@ -295,12 +295,15 @@ def _check_exits(sim: _Sim, o: Any, hi: Any, lo: Any, tick: float,
     sim.sl_px = xp.where(long_be_trig, xp.maximum(sim.sl_px, long_be_px), sim.sl_px)
     sim.sl_px = xp.where(short_be_trig, xp.minimum(sim.sl_px, short_be_px), sim.sl_px)
 
-    # Continuous trailing stop
+    # Continuous trailing stop: only activates once favorable excursion reaches >= +1.5 ATR
+    # This prevents premature stop-outs during initial trade formation.
+    long_trail_active = has_trail & long & (sim.peak_px >= sim.entry_px + 1.5 * sim.pos_atr)
+    short_trail_active = has_trail & short & (sim.peak_px <= sim.entry_px - 1.5 * sim.pos_atr)
     long_trail_px = sim.peak_px - sim.pos_trail * sim.pos_atr
     short_trail_px = sim.peak_px + sim.pos_trail * sim.pos_atr
 
-    sim.sl_px = xp.where(has_trail & long, xp.maximum(sim.sl_px, long_trail_px), sim.sl_px)
-    sim.sl_px = xp.where(has_trail & short, xp.minimum(sim.sl_px, short_trail_px), sim.sl_px)
+    sim.sl_px = xp.where(long_trail_active, xp.maximum(sim.sl_px, long_trail_px), sim.sl_px)
+    sim.sl_px = xp.where(short_trail_active, xp.minimum(sim.sl_px, short_trail_px), sim.sl_px)
 
 
 def backtest(
