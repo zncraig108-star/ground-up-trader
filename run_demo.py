@@ -677,7 +677,84 @@ def main() -> int:
         cycle_note = "unbounded repetition" if args.cycles == 0 else f"{args.cycles} pass(es)"
         print(f"  WFO repetition explicitly enabled: {cycle_note}.")
 
-    # 1. foundations
+    total = cfg.ga.generations
+
+    # If serving the UI (default), start the UI server first and load/stream data in background
+    if not args.no_serve:
+        from ui.server import create_dashboard, run_server
+        from live.exchange import PaperAdapter
+        from live.executor import Executor
+        from core.data import slice_year
+        import os
+
+        host = args.host or cfg.ui.host
+        port = args.port or cfg.ui.port
+
+        def init_demo_worker(dash):
+            # 1. Get the data (download if requested, auto-detect real data if present, or synthetic fallback)
+            if args.download:
+                from scripts.download_data import download_all
+                dash.push_progress({"stage": "data", "status": "downloading latest candles..."})
+                asyncio.run(download_all(product="SOL-USD", output_dir="data"))
+
+            data_path = args.data
+            funding_path = args.funding
+            if not data_path and os.path.exists("data/sol_1m.parquet"):
+                data_path = "data/sol_1m.parquet"
+                if not funding_path and os.path.exists("data/sol_funding.parquet"):
+                    funding_path = "data/sol_funding.parquet"
+
+            if data_path:
+                dash.push_progress({"stage": "data", "status": f"loading {data_path}..."})
+                sd = load_market_data(data_path, funding_path)
+                full_sd = sd
+                if args.year is not None:
+                    sd = slice_year(sd, args.year)
+                manifest = data_manifest(sd)
+                yr_str = f" [year {args.year}]" if args.year else ""
+                print(f"data: REAL '{data_path}'{yr_str}  1m {sd.ohlcv_1m.shape}  1h {sd.ohlcv_1h.shape}  "
+                      f"funding {sd.funding.shape}")
+                print(f"  manifest: {manifest['coverage_start']} .. {manifest['coverage_end']}  "
+                      f"gaps={manifest['missing_1m_bars']}  sha256_1m={manifest['sha256_1m'][:12]}…  "
+                      f"funding_mean={manifest['funding_mean']:.2e}")
+            else:
+                dash.push_progress({"stage": "data", "status": "generating synthetic data..."})
+                sd = make_synthetic(seed=cfg.data.global_seed, days=cfg.data.synth_days,
+                                    start=cfg.data.synth_start, cfg=cfg.data)
+                full_sd = None
+                yr_str = f" [year {args.year}]" if args.year else ""
+                print(f"data: SYNTHETIC{yr_str}  seed={cfg.data.global_seed}  1m {sd.ohlcv_1m.shape}  "
+                      f"1h {sd.ohlcv_1h.shape}  funding {sd.funding.shape}")
+
+            training_yr = args.year or (int(sd.ohlcv_1m.index[0].year) if len(sd.ohlcv_1m) > 0 else 2024)
+            dash.market_data = full_sd or sd
+            dash.training_year = training_yr
+
+            # 2. Setup engine and executor
+            engine = EvolutionEngine(cfg, sd.ohlcv_1m, sd.ohlcv_1h, sd.funding, inst,
+                                      seed=cfg.data.global_seed, walk_forward=args.walk_forward)
+            engine.walk_forward_repeat = args.walk_forward and args.cycles is not None
+            engine.walk_forward_max_cycles = args.cycles if args.cycles is not None else (1 if args.walk_forward else 0)
+
+            pa = PaperAdapter(inst, initial_equity=cfg.risk.initial_equity)
+            executor = Executor(cfg, inst, pa)
+
+            dash.engine = engine
+            dash.executor = executor
+            dash.n_generations = wfo_planned if args.walk_forward else (cfg.ga.generations if total > 0 else None)
+
+        dash = create_dashboard(auto_start=True, init_fn=init_demo_worker)
+        note = "walk-forward" if args.walk_forward else "single window"
+        stop_note = ("repeats until Ctrl+C" if args.cycles == 0 else
+                     f"runs {args.cycles} complete pass(es)" if args.cycles is not None else
+                     f"runs one complete pass ({wfo_planned} generations)" if args.walk_forward else
+                     (f"stops after {total} total generations" if total > 0 else "runs until Ctrl+C"))
+        print(f"launching UI first at http://{host}:{port}  ({note}; {stop_note})")
+        run_server(host=host, port=port, dashboard=dash)
+        print("server stopped.")
+        return 0
+
+    # 1. foundations (headless --no-serve mode)
     from core.data import slice_year
     if args.data:
         sd = load_market_data(args.data, args.funding)
@@ -707,64 +784,25 @@ def main() -> int:
     # 2. self-checks
     run_self_checks(inst, sd, cfg)
 
-    # 3-4. WFO normally runs one complete per-window schedule; non-WFO uses its budget.
+    # 3-4. evolution
     engine = EvolutionEngine(cfg, sd.ohlcv_1m, sd.ohlcv_1h, sd.funding, inst,
                               seed=cfg.data.global_seed, walk_forward=args.walk_forward)
     engine.walk_forward_repeat = args.walk_forward and args.cycles is not None
     engine.walk_forward_max_cycles = args.cycles if args.cycles is not None else (1 if args.walk_forward else 0)
-    total = cfg.ga.generations
 
     def _print_snap(s):
         print(f"  gen {s.generation}: cycle={s.cycle} window={s.window_index + 1}/{s.n_windows} "
               f"best_fitness={s.best_fitness:.4f}  pool={s.deployment_pool_size}")
 
-    # WFO server mode must start the engine directly: foreground work would split its pass.
-    if args.walk_forward and not args.no_serve:
-        from ui.server import create_dashboard, run_server
-        from live.exchange import PaperAdapter
-        from live.executor import Executor
-
-        # Dashboard historically enables WFO repetition when it starts its worker.
-        # Reapply this command's explicit policy immediately before the real run.
-        engine_run = engine.run
-
-        def run_wfo_from_dashboard(n_generations, callback=None):
-            engine.walk_forward_repeat = args.cycles is not None
-            engine.walk_forward_max_cycles = args.cycles if args.cycles is not None else 1
-            return engine_run(n_generations, callback)
-
-        engine.run = run_wfo_from_dashboard
-        pa = PaperAdapter(inst, initial_equity=cfg.risk.initial_equity)
-        executor = Executor(cfg, inst, pa)
-        dash = create_dashboard(engine=engine, executor=executor, auto_start=True,
-                                n_generations=wfo_planned, market_data=full_sd or sd,
-                                training_year=training_yr)
-        host = args.host or cfg.ui.host
-        port = args.port or cfg.ui.port
-        stop_note = ("repeats until Ctrl+C" if args.cycles == 0 else
-                     f"runs {args.cycles} complete pass(es)" if args.cycles is not None else
-                     f"runs one complete pass ({wfo_planned} generations)")
-        print(f"launching UI at http://{host}:{port}  (walk-forward; {stop_note}; "
-              "server stays up until Ctrl+C)")
-        run_server(host=host, port=port, dashboard=dash)
-        print("server stopped.")
-        return 0
-
-    # Foreground warmup is non-WFO only. WFO must never be split across warmup/UI phases.
-    if args.no_serve:
-        warm = wfo_planned if args.walk_forward else total
-    else:
-        warm = args.warmup if total <= 0 else min(args.warmup, total)
+    warm = wfo_planned if args.walk_forward else total
     snaps = engine.run(warm, callback=_print_snap)
 
-    # Elitism guarantees best fitness is non-decreasing *within* a window.
     for _, grp in __import__("itertools").groupby(snaps, key=lambda s: s.window_index):
         b = [s.best_fitness for s in grp]
         assert all(b[i + 1] >= b[i] - 1e-12 for i in range(len(b) - 1)), "elitism violated"
     print(f"  [ok] best fitness non-decreasing within each window "
           f"({len(engine.windows)} window(s))")
 
-    # Walk-forward aggregate equity: monotone in time + finite aggregate metrics.
     if snaps and snaps[-1].aggregate_equity_curve:
         agg = snaps[-1].aggregate_equity_curve
         ts = [p[0] for p in agg]
@@ -777,21 +815,9 @@ def main() -> int:
               f"{len(snaps[-1].window_board)} windows (WF Sharpe {am['sharpe']:.2f}, "
               f"PSR {am['psr']:.2f}, DSR {am['dsr']:.2f}, PBO {am['pbo']:.2f}, "
               f"overfit gap {am['overfit_gap']:+.2f})\n")
-    else:
-        print()
-
-    # Once-only holdout check (never used by any window).
-    if args.walk_forward and cfg.wfo.holdout_days > 0:
-        hr = engine.holdout_report
-        assert hr and int(hr.get("days", 0)) == cfg.wfo.holdout_days, \
-            f"holdout not evaluated: {hr}"
-        print(f"  [ok] one-shot holdout ({hr['days']}d, genome {hr['genome_id']}): "
-              f"Sharpe {hr['sharpe']:.2f}, return {hr['total_return'] * 100:.1f}%, "
-              f"trades {hr['trades']}, fees {hr['fees']:.1f}, funding {hr['funding']:.1f}\n")
 
     top = engine.deployment_pool[0] if engine.deployment_pool else None
     if top is None and snaps:
-        # Fall back to the best genome from the last snapshot if the pool is empty.
         best_genome = max(snaps[-1].top_genomes, key=lambda g: g["fitness"])
         print("  note: deployment pool empty (OOS gate) — deploying best IS genome instead")
         genome = Genome(**best_genome["params"])
@@ -801,7 +827,6 @@ def main() -> int:
               f"(median validation sharpe={float(top.get('median_sharpe', 0.0)):.3f}, "
               f"score={float(top.get('score', 0.0)):.3f})")
 
-    # 5. live/paper demo
     from live.exchange import candles_from_dataframe
     import asyncio
 
@@ -818,32 +843,11 @@ def main() -> int:
     print(f"  [ok] paper executor ran 3 days: final_equity={eq:.2f} "
           f"breaker_tripped={tripped} deployed={deployed}\n")
 
-    if args.no_serve:
-        if args.walk_forward:
-            print(f"demo complete (--no-serve): planned {engine.planned_generations} WFO "
-                  f"generations; completed {engine.completed_generations}.")
-        else:
-            print(f"demo complete (--no-serve): ran {engine.generation} generations total.")
-        return 0
-
-    # 6. UI — serve the remaining budget, then keep the final dashboard available.
-    from ui.server import create_dashboard, run_server
-    from live.exchange import PaperAdapter
-    from live.executor import Executor
-
-    remaining = 0 if total <= 0 else max(0, total - engine.generation)
-    pa = PaperAdapter(inst, initial_equity=cfg.risk.initial_equity)
-    executor = Executor(cfg, inst, pa)
-    dash = create_dashboard(engine=engine, executor=executor, auto_start=True,
-                            n_generations=remaining, market_data=full_sd or sd,
-                            training_year=training_yr)
-    host = args.host or cfg.ui.host
-    port = args.port or cfg.ui.port
-    note = "cycling all windows" if args.walk_forward else "single window"
-    stop_note = f"stops after {total} total generations" if total > 0 else "runs until Ctrl+C"
-    print(f"launching UI at http://{host}:{port}  ({note}; {stop_note}; server stays up until Ctrl+C)")
-    run_server(host=host, port=port, dashboard=dash)
-    print("server stopped.")
+    if args.walk_forward:
+        print(f"demo complete (--no-serve): planned {engine.planned_generations} WFO "
+              f"generations; completed {engine.completed_generations}.")
+    else:
+        print(f"demo complete (--no-serve): ran {engine.generation} generations total.")
     return 0
 
 

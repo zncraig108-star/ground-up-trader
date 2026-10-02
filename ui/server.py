@@ -19,7 +19,7 @@ import asyncio
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -43,13 +43,15 @@ class Dashboard:
                  executor: Any = None, auto_start: bool = True,
                  n_generations: Optional[int] = None,
                  market_data: Optional[Any] = None,
-                 training_year: Optional[int] = None) -> None:
+                 training_year: Optional[int] = None,
+                 init_fn: Optional[Callable[["Dashboard"], None]] = None) -> None:
         self.engine = engine
         self.executor = executor
         self.auto_start = auto_start
         self.n_generations = n_generations
         self.market_data = market_data
         self.training_year = training_year
+        self.init_fn = init_fn
         if self.training_year is None and engine is not None and getattr(engine, "config", None):
             self.training_year = getattr(engine.config.data, "train_year", None)
         if self.training_year is None and market_data is not None and hasattr(market_data, "ohlcv_1m") and len(market_data.ohlcv_1m) > 0:
@@ -70,11 +72,20 @@ class Dashboard:
         """Start the broadcaster task and (optionally) the engine thread."""
         self.loop = asyncio.get_running_loop()
         self._task = asyncio.create_task(self._broadcast())
-        if self.auto_start and self.engine is not None:
+        if self.auto_start and (self.engine is not None or self.init_fn is not None):
             self._start_engine_thread()
 
     def _start_engine_thread(self) -> None:
         def run() -> None:
+            if self.init_fn is not None:
+                try:
+                    self._push_lifecycle("loading_data", "Loading market data...")
+                    self.init_fn(self)
+                except Exception as exc:
+                    self._push_lifecycle("failed", str(exc))
+                    return
+            if self.engine is None:
+                return
             # None -> fall back to config; 0 -> run until cancelled (infinite).
             n = self.n_generations if self.n_generations is not None \
                 else self.engine.config.ga.generations
@@ -573,12 +584,14 @@ def create_dashboard(engine: Optional[EvolutionEngine] = None, executor: Any = N
                      auto_start: bool = True,
                      n_generations: Optional[int] = None,
                      market_data: Optional[Any] = None,
-                     training_year: Optional[int] = None) -> Dashboard:
+                     training_year: Optional[int] = None,
+                     init_fn: Optional[Callable[["Dashboard"], None]] = None) -> Dashboard:
     """Build a Dashboard and attach it to the app's state."""
     dash = Dashboard(engine=engine, executor=executor, auto_start=auto_start,
                      n_generations=n_generations,
                      market_data=market_data,
-                     training_year=training_year)
+                     training_year=training_year,
+                     init_fn=init_fn)
     app.state.dashboard = dash
     return dash
 
