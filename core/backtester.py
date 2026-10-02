@@ -540,15 +540,21 @@ def backtest(
                 if fm.same_bar_stop_check:
                     _check_exits(sim, o, hi, lo, tick, taker_rate, maker_rate, fm, mask=bk_fill)
 
-        # D3. Pyramiding on profit-locked runners:
-        # If trade reached +2.0 ATR excursion AND trailing stop has locked in >= +0.5 ATR profit:
-        # Reinvest floating profit by adding +35% size at market while stop trails.
-        can_pyr = (sim.pos != 0) & (sim.pyramid_count == 0) & (
+        # D3. Multi-tier pyramiding on profit-locked runners:
+        # Tier 1 (pyramid_count == 0): +2.0 ATR excursion & +0.5 ATR stop profit -> +35% size
+        # Tier 2 (pyramid_count == 1): +4.0 ATR excursion & +2.0 ATR stop profit -> +25% size
+        can_pyr1 = (sim.pos != 0) & (sim.pyramid_count == 0) & (
             ((sim.pos > 0) & (sim.peak_px >= sim.entry_px + 2.0 * sim.pos_atr) & (sim.sl_px >= sim.entry_px + 0.5 * sim.pos_atr)) |
             ((sim.pos < 0) & (sim.peak_px <= sim.entry_px - 2.0 * sim.pos_atr) & (sim.sl_px <= sim.entry_px - 0.5 * sim.pos_atr))
         )
+        can_pyr2 = (sim.pos != 0) & (sim.pyramid_count == 1) & (
+            ((sim.pos > 0) & (sim.peak_px >= sim.entry_px + 4.0 * sim.pos_atr) & (sim.sl_px >= sim.entry_px + 2.0 * sim.pos_atr)) |
+            ((sim.pos < 0) & (sim.peak_px <= sim.entry_px - 4.0 * sim.pos_atr) & (sim.sl_px <= sim.entry_px - 2.0 * sim.pos_atr))
+        )
+        can_pyr = can_pyr1 | can_pyr2
         if bool(asnumpy(xp.any(can_pyr))):
-            pyr_qty = xp.floor(xp.abs(sim.pos) * 0.35 / lot + 1e-9) * lot
+            pyr_pct = xp.where(can_pyr1, 0.35, 0.25)
+            pyr_qty = xp.floor(xp.abs(sim.pos) * pyr_pct / lot + 1e-9) * lot
             valid_pyr = can_pyr & (pyr_qty > 0)
             if bool(asnumpy(xp.any(valid_pyr))):
                 pyr_side = xp.sign(sim.pos)
@@ -561,7 +567,7 @@ def backtest(
                 new_pos = sim.pos + xp.where(valid_pyr, pyr_side * pyr_qty, 0.0)
                 sim.entry_px = xp.where(valid_pyr, (old_notional + add_notional) / xp.maximum(xp.abs(new_pos), 1e-12), sim.entry_px)
                 sim.pos = new_pos
-                sim.pyramid_count = xp.where(valid_pyr, 1, sim.pyramid_count)
+                sim.pyramid_count = xp.where(valid_pyr, sim.pyramid_count + 1, sim.pyramid_count)
 
         # E. hourly funding handled at the hour boundary (see above).
 

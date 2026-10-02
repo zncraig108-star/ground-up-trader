@@ -405,16 +405,25 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                             if trail_sl < sl_px:
                                 sl_px = trail_sl
 
-            # pyramiding on profit-locked runners:
-            # If trade reached +2.0 ATR excursion AND trailing stop has locked in >= +0.5 ATR profit:
-            # Reinvest floating profit by adding +35% size at market while stop trails.
-            if pos != 0.0 and pyramid_count == 0:
-                can_pyr = (
-                    (pos > 0.0 and peak_px >= entry_px + 2.0 * pos_atr and sl_px >= entry_px + 0.5 * pos_atr) or
-                    (pos < 0.0 and peak_px <= entry_px - 2.0 * pos_atr and sl_px <= entry_px - 0.5 * pos_atr)
-                )
+            # multi-tier pyramiding on profit-locked runners:
+            # Tier 1 (pyramid_count == 0): +2.0 ATR excursion & +0.5 ATR stop profit -> +35% size
+            # Tier 2 (pyramid_count == 1): +4.0 ATR excursion & +2.0 ATR stop profit -> +25% size
+            if pos != 0.0:
+                can_pyr = False
+                pyr_mult = 0.0
+                if pyramid_count == 0:
+                    if (pos > 0.0 and peak_px >= entry_px + 2.0 * pos_atr and sl_px >= entry_px + 0.5 * pos_atr) or \
+                       (pos < 0.0 and peak_px <= entry_px - 2.0 * pos_atr and sl_px <= entry_px - 0.5 * pos_atr):
+                        can_pyr = True
+                        pyr_mult = 0.35
+                elif pyramid_count == 1:
+                    if (pos > 0.0 and peak_px >= entry_px + 4.0 * pos_atr and sl_px >= entry_px + 2.0 * pos_atr) or \
+                       (pos < 0.0 and peak_px <= entry_px - 4.0 * pos_atr and sl_px <= entry_px - 2.0 * pos_atr):
+                        can_pyr = True
+                        pyr_mult = 0.25
+
                 if can_pyr:
-                    pyr_qty = math.floor(abs(pos) * 0.35 / lot + 1e-9) * lot
+                    pyr_qty = math.floor(abs(pos) * pyr_mult / lot + 1e-9) * lot
                     if pyr_qty > 0.0:
                         pyr_side = 1.0 if pos > 0.0 else -1.0
                         pyr_px = cc + slip_taker if pyr_side > 0.0 else cc - slip_taker
@@ -426,7 +435,7 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                         new_pos = pos + pyr_side * pyr_qty
                         entry_px = (old_notional + add_notional) / max(abs(new_pos), 1e-12)
                         pos = new_pos
-                        pyramid_count = 1
+                        pyramid_count += 1
 
             # mark-to-market + maintenance-margin liquidation
             if pos != 0.0:

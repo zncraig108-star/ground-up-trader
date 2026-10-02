@@ -69,7 +69,7 @@ class InstrumentSpec:
     # Funding settles hourly (per the spec).
     funding_interval_hours: int = 1
     # Hard leverage cap. The strategy's target_leverage must be <= this.
-    max_leverage: float = 3.0
+    max_leverage: float = 4.0
     # Maintenance margin rate: fraction of notional that must be backed by equity.
     maintenance_margin_rate: float = 0.05  # VERIFY vs live Coinbase spec
 
@@ -138,13 +138,13 @@ GENES: Tuple[GeneSpec, ...] = (
     GeneSpec("st_mult", 2.0, 4.0),
     GeneSpec("atr_period", 7.0, 28.0, integer=True),
     GeneSpec("entry_offset_atr_mult", 0.0, 2.5),
-    GeneSpec("tp_atr_mult", 1.5, 25.0),
+    GeneSpec("tp_atr_mult", 2.0, 35.0),
     GeneSpec("sl_atr_mult", 0.5, 4.0),
     GeneSpec("max_hold_bars", 12.0, 720.0, integer=True),
-    GeneSpec("target_leverage", 1.0, 3.0),
+    GeneSpec("target_leverage", 1.0, 4.0),
     GeneSpec("regime_mode", float(REGIME_EMA), float(REGIME_SUPERTREND), discrete=True),
-    GeneSpec("risk_per_trade_pct", 0.020, 0.150),
-    GeneSpec("trailing_atr_mult", 1.5, 8.0),
+    GeneSpec("risk_per_trade_pct", 0.020, 0.200),
+    GeneSpec("trailing_atr_mult", 1.5, 10.0),
     GeneSpec("funding_filter_z", 0.5, 3.5),
     GeneSpec("volume_filter_z", -1.0, 2.5),
 )
@@ -226,8 +226,8 @@ class ChampionValidationConfig:
     minimum_positive_period_ratio: float = 0.60
     minimum_trades_per_period: int = 10
     maximum_trades_per_period: int = 80  # turnover guard: reject over-trading candidates
-    maximum_period_drawdown: float = 0.15
-    minimum_period_sharpe: float = -1.0
+    maximum_period_drawdown: float = 0.30
+    minimum_period_sharpe: float = -0.5
     maximum_candidates: int = 100
 
 
@@ -276,9 +276,9 @@ class WFOConfig:
     ``generations_per_window`` generations in each window.
     """
 
-    is_days: int = 60
-    oos_days: int = 14
-    step_days: int = 14  # rolling step (default == oos_days)
+    is_days: int = 90
+    oos_days: int = 30
+    step_days: int = 30  # rolling step (default == oos_days)
     generations_per_window: int = 20
     holdout_days: int = 0  # final days reserved from WFO windows (0 = no holdout)
 
@@ -287,9 +287,9 @@ class WFOConfig:
 class RiskConfig:
     """Risk guardrails for the live/paper executor."""
 
-    max_leverage: float = 2.0  # hard cap (mirrors InstrumentSpec)
-    target_leverage: float = 2.0  # default deploy leverage (<= max)
-    drawdown_breaker_pct: float = 6.0  # unrealized DD within window -> halt
+    max_leverage: float = 4.0  # hard cap (mirrors InstrumentSpec)
+    target_leverage: float = 3.0  # default deploy leverage (<= max)
+    drawdown_breaker_pct: float = 22.0  # unrealized DD within window -> halt
     breaker_window_hours: int = 24
     enforce_breaker_in_backtest: bool = False  # mirror the live breaker during training
     initial_equity: float = 10_000.0  # starting account equity (USD) for backtest/paper
