@@ -184,7 +184,7 @@ def round_integer_genes(genome_batch: Any) -> Any:
 
 @dataclass(frozen=True)
 class SignalFeatures:
-    """Closed-candle 1h feature bundle consumed by ``compute_signals``."""
+    """Closed-candle feature bundle consumed by ``compute_signals``."""
 
     open: Any  # (N,)
     high: Any  # (N,)
@@ -192,6 +192,7 @@ class SignalFeatures:
     close: Any  # (N,)
     volume_zscore: Any = None  # (N,) causal volume z-score
     funding_zscore: Any = None  # (N,) causal funding rate z-score
+    timeframe_minutes: float = 60.0  # candle duration in minutes (default 1h = 60m)
 
 
 @dataclass
@@ -214,7 +215,7 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
     """Compute entry/regime intents for a whole population, vectorized over ``P``.
 
     Args:
-        features: ``SignalFeatures`` of closed 1h candles (shape ``(N,)`` each).
+        features: ``SignalFeatures`` of closed candles (shape ``(N,)`` each).
         genome_batch: ``(P, NUM_GENES)`` float64 array (numpy or xp).
         progress_cb: optional ``cb(fraction)`` for live progress (fired inside the
             indicator time loops, so the UI animates smoothly during this phase).
@@ -230,11 +231,13 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
     # Period genes are whole bars: round at use-site so a genome is reproducible.
     g = round_integer_genes(genome_batch)
 
-    ema_fast = g[:, GENE_INDEX["ema_fast"]]
-    ema_slow = g[:, GENE_INDEX["ema_slow"]]
-    st_period = g[:, GENE_INDEX["st_period"]]
+    # Timeframe normalization: scale bar periods so lookback hours remain constant across timeframes
+    tf_scale = 60.0 / max(float(getattr(features, "timeframe_minutes", 60.0)), 1.0)
+    ema_fast = xp.clip(xp.rint(g[:, GENE_INDEX["ema_fast"]] * tf_scale), 2, 500) if tf_scale != 1.0 else g[:, GENE_INDEX["ema_fast"]]
+    ema_slow = xp.clip(xp.rint(g[:, GENE_INDEX["ema_slow"]] * tf_scale), 5, 2000) if tf_scale != 1.0 else g[:, GENE_INDEX["ema_slow"]]
+    st_period = xp.clip(xp.rint(g[:, GENE_INDEX["st_period"]] * tf_scale), 2, 500) if tf_scale != 1.0 else g[:, GENE_INDEX["st_period"]]
     st_mult = g[:, GENE_INDEX["st_mult"]]
-    atr_period = g[:, GENE_INDEX["atr_period"]]
+    atr_period = xp.clip(xp.rint(g[:, GENE_INDEX["atr_period"]] * tf_scale), 2, 500) if tf_scale != 1.0 else g[:, GENE_INDEX["atr_period"]]
     entry_offset = g[:, GENE_INDEX["entry_offset_atr_mult"]]
     mode = g[:, GENE_INDEX["regime_mode"]]
 
@@ -275,7 +278,7 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
     # Kaufman Efficiency Ratio = net displacement / total path length over 14 bars.
     # When ER < 0.22, price is oscillating in low-efficiency sideways chop;
     # staying flat avoids false breakouts and preserves capital for real trends.
-    k_er = 14
+    k_er = max(2, int(round(14 * tf_scale)))
     er_1d = xp.zeros(n, dtype=xp.float64)
     if n > k_er:
         diffs = xp.abs(close[1:] - close[:-1])
@@ -309,6 +312,9 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
     # --- Entry limits ----------------------------------------------------------
     # In vertical trends (ER >= 0.35), reduce entry offset to 0.15x so we don't miss runaway moves.
     eff_offset = xp.where(er_1d[None, :] >= 0.35, 0.15 * entry_offset[:, None], entry_offset[:, None])
+    # Timeframe-specific cost hurdle: ensure limit offset covers round-trip fees vs ATR
+    fee_hurdle = (0.0006 * close[None, :]) / xp.maximum(atr, 1e-6)
+    eff_offset = xp.maximum(eff_offset, fee_hurdle)
     entry_price = xp.full((p, n), xp.nan, dtype=xp.float64)
     entry_price = xp.where(long_entry, close[None, :] - eff_offset * atr, entry_price)
     entry_price = xp.where(short_entry, close[None, :] + eff_offset * atr, entry_price)

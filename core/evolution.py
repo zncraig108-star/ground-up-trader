@@ -158,6 +158,11 @@ class EvolutionEngine:
             config, champion_validation=self._scaled_validation_policy())
 
         feat_set = compute_features(ohlcv_1h, funding)
+        tf_mins = 60.0
+        if len(ohlcv_1h) >= 2:
+            dt_s = (ohlcv_1h.index[1] - ohlcv_1h.index[0]).total_seconds()
+            if dt_s > 0:
+                tf_mins = dt_s / 60.0
         self.features = SignalFeatures(
             open=ohlcv_1h["open"].to_numpy(),
             high=ohlcv_1h["high"].to_numpy(),
@@ -165,6 +170,7 @@ class EvolutionEngine:
             close=ohlcv_1h["close"].to_numpy(),
             volume_zscore=feat_set.volume_zscore,
             funding_zscore=feat_set.funding_zscore,
+            timeframe_minutes=tf_mins,
         )
 
         windows = build_windows(self.n_hours, self.wfo)
