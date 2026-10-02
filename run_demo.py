@@ -603,7 +603,9 @@ def build_demo_config(args: argparse.Namespace):
 def main() -> int:
     ap = argparse.ArgumentParser(description="SOL-PERP Evolutionary Trading System demo")
     ap.add_argument("--year", type=int, default=None,
-                    help="calendar year to train on (e.g. 2024); filters real data or sets synthetic start to that year")
+                    help="calendar year to train on (e.g. 2024; defaults to 2024 for real data; pass --all-time for all history)")
+    ap.add_argument("--all-time", dest="all_time", action="store_true",
+                    help="train across all available history instead of a single calendar year")
     ap.add_argument("--days", type=int, default=35, help="synthetic history length (days)")
     ap.add_argument("--data", default=None,
                     help="path to a real 1m OHLCV file (Parquet/CSV); replaces --days synthetic data")
@@ -626,12 +628,18 @@ def main() -> int:
                          "once-only champion holdout check (0 = off)")
     ap.add_argument("--generations-per-window", type=int, default=None,
                     help="WFO generations for each window (default: 20)")
-    ap.add_argument("--cycles", type=int, default=None,
-                    help="explicitly repeat WFO passes: positive value is max passes; 0 repeats until Ctrl+C")
+    ap.add_argument("--cycles", "--cycle", dest="cycles", nargs="?", const=0, type=int, default=None,
+                    help="repeat WFO passes: without number or 0 repeats continuously; positive integer runs N cycles")
     ap.add_argument("--no-serve", action="store_true", help="skip launching the UI server")
     ap.add_argument("--download", action="store_true",
                     help="download latest real Coinbase SOL candles up to present before running")
     args = ap.parse_args()
+    if args.cycles is not None:
+        args.walk_forward = True
+    if args.all_time:
+        args.year = None
+    elif args.year is None and args.data:
+        args.year = 2024
     if args.download:
         import os
         from scripts.download_data import download_all
@@ -731,23 +739,34 @@ def main() -> int:
             dash.training_year = training_yr
 
             # 2. Setup engine and executor
+            repeat = args.walk_forward and (args.cycles is not None or not args.no_serve)
+            if args.cycles is not None:
+                max_cycles = args.cycles
+            elif not args.no_serve and args.walk_forward:
+                max_cycles = 0  # continuous while dashboard server is running
+            else:
+                max_cycles = 1
+
             engine = EvolutionEngine(cfg, sd.ohlcv_1m, sd.ohlcv_1h, sd.funding, inst,
                                       seed=cfg.data.global_seed, walk_forward=args.walk_forward)
-            engine.walk_forward_repeat = args.walk_forward and args.cycles is not None
-            engine.walk_forward_max_cycles = args.cycles if args.cycles is not None else (1 if args.walk_forward else 0)
+            engine.walk_forward_repeat = repeat
+            engine.walk_forward_max_cycles = max_cycles
 
             pa = PaperAdapter(inst, initial_equity=cfg.risk.initial_equity)
             executor = Executor(cfg, inst, pa)
 
             dash.engine = engine
             dash.executor = executor
-            dash.n_generations = wfo_planned if args.walk_forward else (cfg.ga.generations if total > 0 else None)
+            if max_cycles > 0:
+                dash.n_generations = wfo_planned * max_cycles if args.walk_forward else total
+            else:
+                dash.n_generations = 0
 
         dash = create_dashboard(auto_start=True, init_fn=init_demo_worker)
         note = "walk-forward" if args.walk_forward else "single window"
-        stop_note = ("repeats until Ctrl+C" if args.cycles == 0 else
-                     f"runs {args.cycles} complete pass(es)" if args.cycles is not None else
-                     f"runs one complete pass ({wfo_planned} generations)" if args.walk_forward else
+        max_c = args.cycles if args.cycles is not None else (0 if args.walk_forward else 1)
+        stop_note = ("repeats continuously until Ctrl+C" if max_c == 0 else
+                     f"runs {max_c} complete pass(es) ({wfo_planned * max_c} generations)" if args.walk_forward else
                      (f"stops after {total} total generations" if total > 0 else "runs until Ctrl+C"))
         print(f"launching UI first at http://{host}:{port}  ({note}; {stop_note})")
         run_server(host=host, port=port, dashboard=dash)
@@ -785,16 +804,18 @@ def main() -> int:
     run_self_checks(inst, sd, cfg)
 
     # 3-4. evolution
+    repeat = args.walk_forward and args.cycles is not None and args.cycles != 1
+    max_cycles = args.cycles if args.cycles is not None else 1
     engine = EvolutionEngine(cfg, sd.ohlcv_1m, sd.ohlcv_1h, sd.funding, inst,
                               seed=cfg.data.global_seed, walk_forward=args.walk_forward)
-    engine.walk_forward_repeat = args.walk_forward and args.cycles is not None
-    engine.walk_forward_max_cycles = args.cycles if args.cycles is not None else (1 if args.walk_forward else 0)
+    engine.walk_forward_repeat = repeat
+    engine.walk_forward_max_cycles = max_cycles
 
     def _print_snap(s):
         print(f"  gen {s.generation}: cycle={s.cycle} window={s.window_index + 1}/{s.n_windows} "
               f"best_fitness={s.best_fitness:.4f}  pool={s.deployment_pool_size}")
 
-    warm = wfo_planned if args.walk_forward else total
+    warm = (wfo_planned * max_cycles if max_cycles > 0 else 0) if args.walk_forward else total
     snaps = engine.run(warm, callback=_print_snap)
 
     for _, grp in __import__("itertools").groupby(snaps, key=lambda s: s.window_index):
