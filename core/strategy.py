@@ -76,6 +76,7 @@ class Genome:
     funding_filter_z: float = 2.0
     volume_filter_z: float = 0.0
     er_threshold: float = 0.35
+    adx_threshold: float = 25.0  # Wilder ADX must exceed this to allow entries
 
     def encode(self) -> np.ndarray:
         """Encode to a flat float64 array in canonical gene order."""
@@ -97,6 +98,7 @@ class Genome:
                 self.funding_filter_z,
                 self.volume_filter_z,
                 self.er_threshold,
+                self.adx_threshold,
             ],
             dtype=np.float64,
         )
@@ -122,6 +124,7 @@ class Genome:
             funding_filter_z=float(a[13]) if len(a) > 13 else 2.0,
             volume_filter_z=float(a[14]) if len(a) > 14 else 0.0,
             er_threshold=float(a[15]) if len(a) > 15 else 0.35,
+            adx_threshold=float(a[16]) if len(a) > 16 else 25.0,
         )
 
 
@@ -196,6 +199,7 @@ class SignalFeatures:
     volume_zscore: Any = None  # (N,) causal volume z-score
     funding_zscore: Any = None  # (N,) causal funding rate z-score
     timeframe_minutes: float = 60.0  # candle duration in minutes (default 1h = 60m)
+    trend_strength: Any = None  # (N,) 72h EMA slope (fractional per bar); NaN during warm-up
 
 
 @dataclass
@@ -231,6 +235,14 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
         its own bar index (no lookahead); the ``T -> T+1`` action shift is applied by
         the backtester.
     """
+    # Compute scalar 1D indicators before xp conversion: called once (not batched over P).
+    # Using raw numpy features arrays to stay backend-agnostic for these non-batched kernels.
+    _cnp = np.asarray(features.close, dtype=np.float64)
+    _hnp = np.asarray(features.high, dtype=np.float64)
+    _lnp = np.asarray(features.low, dtype=np.float64)
+    adx_1d = xp.asarray(indicators.adx(_hnp, _lnp, _cnp), dtype=xp.float64)  # (N,) Wilder ADX
+    rsi_1d = xp.asarray(indicators.rsi(_cnp), dtype=xp.float64)               # (N,) Wilder RSI
+
     close = xp.asarray(features.close, dtype=xp.float64)
     high = xp.asarray(features.high, dtype=xp.float64)
     low = xp.asarray(features.low, dtype=xp.float64)
@@ -315,6 +327,28 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
 
     long_entry = (regime > 0.5) & vol_pass_long & long_fund_pass
     short_entry = (regime < -0.5) & vol_pass_short & short_fund_pass
+
+    # --- Trend Strength Gate (T1A) -------------------------------------------
+    # 72h EMA slope must agree with the 1h regime signal to prevent entering
+    # low-conviction crossovers that reverse the medium-term momentum.
+    # NaN warm-up bars become 0.0 → fail both > 0 and < 0 → no entries during warm-up.
+    if features.trend_strength is not None:
+        ts_1d = xp.asarray(np.nan_to_num(np.asarray(features.trend_strength, dtype=np.float64), nan=0.0), dtype=xp.float64)
+        long_entry = long_entry & (ts_1d[None, :] > 0)
+        short_entry = short_entry & (ts_1d[None, :] < 0)
+
+    # --- ADX Trend Strength Gate (T2A) ----------------------------------------
+    # ADX measures the speed/acceleration of the trend, complementing ER (directionality).
+    # Genomes evolve their own ADX hurdle; warm-up bars have ADX≈0 → no entries.
+    adx_gate = g[:, GENE_INDEX["adx_threshold"]]  # (P,)
+    long_entry = long_entry & (adx_1d[None, :] >= adx_gate[:, None])
+    short_entry = short_entry & (adx_1d[None, :] >= adx_gate[:, None])
+
+    # --- RSI Anti-Chase Gate (T2B) --------------------------------------------
+    # Prevents entering already-exhausted moves. Hardcoded 75/25 thresholds:
+    # no new gene needed — RSI>75 longs and RSI<25 shorts have poor forward outcomes.
+    long_entry = long_entry & (rsi_1d[None, :] < 75.0)
+    short_entry = short_entry & (rsi_1d[None, :] > 25.0)
 
     # --- Entry limits & Breakout Stops ---------------------------------------
     # In vertical trends (ER >= er_gate) or short/long squeeze fuel, switch to high-velocity

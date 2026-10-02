@@ -138,8 +138,8 @@ GENES: Tuple[GeneSpec, ...] = (
     GeneSpec("st_mult", 2.0, 4.0),
     GeneSpec("atr_period", 7.0, 28.0, integer=True),
     GeneSpec("entry_offset_atr_mult", 0.0, 2.5),
-    GeneSpec("tp_atr_mult", 2.0, 35.0),
-    GeneSpec("sl_atr_mult", 0.5, 4.0),
+    GeneSpec("tp_atr_mult", 2.5, 20.0),    # tightened: 35x ATR TPs never fill in real markets
+    GeneSpec("sl_atr_mult", 0.8, 3.0),      # tightened: 0.5 ATR fires on 1h noise
     GeneSpec("max_hold_bars", 12.0, 720.0, integer=True),
     GeneSpec("target_leverage", 1.0, 4.0),
     GeneSpec("regime_mode", float(REGIME_EMA), float(REGIME_SUPERTREND), discrete=True),
@@ -148,6 +148,7 @@ GENES: Tuple[GeneSpec, ...] = (
     GeneSpec("funding_filter_z", 0.5, 3.5),
     GeneSpec("volume_filter_z", -1.0, 2.5),
     GeneSpec("er_threshold", 0.15, 0.65),
+    GeneSpec("adx_threshold", 15.0, 40.0),  # Wilder ADX hurdle; low = always trade, high = trend-only
 )
 
 GENE_NAMES: Tuple[str, ...] = tuple(g.name for g in GENES)

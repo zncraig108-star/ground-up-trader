@@ -31,6 +31,8 @@ __all__ = [
     "ema_batch",
     "atr_batch",
     "supertrend_batch",
+    "adx",
+    "rsi",
 ]
 
 try:  # pragma: no cover - depends on optional dependency
@@ -301,3 +303,70 @@ def supertrend_batch(high: Any, low: Any, close: Any, period: Any, mult: Any,
         trend[:, t] = xp.where(flip_up, 1, new_trend)
 
     return trend
+
+
+def adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    """Wilder's Average Directional Index (ADX), causal, single series.
+
+    Computes +DI/-DI/DX via Wilder smoothing then smooths DX into ADX.
+    Returns an ``(N,)`` float64 array; leading ``~2 * period`` bars are near 0
+    during warm-up, which naturally suppresses entries until the indicator stabilizes.
+
+    Args:
+        high: ``(N,)`` bar highs.
+        low: ``(N,)`` bar lows.
+        close: ``(N,)`` bar closes (previous close used for True Range).
+        period: Wilder smoothing period (default 14).
+    """
+    n = len(close)
+    out = np.zeros(n, dtype=np.float64)
+    if n < period + 2:
+        return out
+    alpha = 1.0 / period
+    tr_s = dmp_s = dmn_s = adx_s = 0.0
+    for i in range(1, n):
+        tr = max(high[i] - low[i], abs(high[i] - close[i - 1]), abs(low[i] - close[i - 1]))
+        dm_up = high[i] - high[i - 1]
+        dm_dn = low[i - 1] - low[i]
+        dmp = dm_up if dm_up > dm_dn and dm_up > 0 else 0.0
+        dmn = dm_dn if dm_dn > dm_up and dm_dn > 0 else 0.0
+        # Wilder exponential smoothing (equivalent to EMA with alpha = 1/period)
+        tr_s += alpha * (tr - tr_s)
+        dmp_s += alpha * (dmp - dmp_s)
+        dmn_s += alpha * (dmn - dmn_s)
+        if i < period:
+            continue
+        dip = 100.0 * dmp_s / tr_s if tr_s > 1e-12 else 0.0
+        din = 100.0 * dmn_s / tr_s if tr_s > 1e-12 else 0.0
+        dx = 100.0 * abs(dip - din) / (dip + din) if (dip + din) > 1e-12 else 0.0
+        adx_s += alpha * (dx - adx_s)
+        out[i] = adx_s
+    return out
+
+
+def rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
+    """Wilder's RSI, causal, single series.
+
+    Returns an ``(N,)`` float64 array. Leading ``period`` bars default to 50.0
+    (neutral) so they pass the overbought/oversold gate and do not suppress entries
+    during warm-up — ADX and ER gates cover the warm-up period adequately.
+
+    Args:
+        close: ``(N,)`` bar closes.
+        period: Wilder smoothing period (default 14).
+    """
+    n = len(close)
+    out = np.full(n, 50.0, dtype=np.float64)
+    if n < period + 1:
+        return out
+    alpha = 1.0 / period
+    gain_s = loss_s = 0.0
+    for i in range(1, n):
+        d = close[i] - close[i - 1]
+        gain_s += alpha * (max(d, 0.0) - gain_s)
+        loss_s += alpha * (max(-d, 0.0) - loss_s)
+        if i < period:
+            continue
+        rs = gain_s / loss_s if loss_s > 1e-12 else 1e12
+        out[i] = 100.0 - 100.0 / (1.0 + rs)
+    return out

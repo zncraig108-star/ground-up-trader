@@ -171,6 +171,7 @@ class EvolutionEngine:
             volume_zscore=feat_set.volume_zscore,
             funding_zscore=feat_set.funding_zscore,
             timeframe_minutes=tf_mins,
+            trend_strength=feat_set.trend_strength,
         )
 
         windows = build_windows(self.n_hours, self.wfo)
@@ -330,6 +331,7 @@ class EvolutionEngine:
             volume_zscore=self.features.volume_zscore[h0:h1],
             funding_zscore=self.features.funding_zscore[h0:h1],
             timeframe_minutes=self.features.timeframe_minutes,
+            trend_strength=self.features.trend_strength[h0:h1] if self.features.trend_strength is not None else None,
         )
 
     def _slice_signals(self, signals: SignalIntents, row_indices: Any, h0: int, h1: int) -> SignalIntents:
@@ -509,6 +511,17 @@ class EvolutionEngine:
                 # clears the consistency bar. It is per-genome (population-independent),
                 # so an elite's fitness is identical across generations (elitism holds).
                 is_fitness = blended + 1e-9 * base
+
+        # T1B: benchmark-relative alpha factor — reward beating buy-and-hold in IS window.
+        # Uses close prices from the full feature array (causal: IS window only, no future data).
+        bh_start = float(self.features.close[win.is_h0])
+        bh_end = float(self.features.close[win.is_h1 - 1])
+        if bh_start > 0:
+            bh_return = bh_end / bh_start - 1.0
+            excess = asnumpy(is_metrics.total_return) - bh_return
+            # Smooth reward/penalty: +0.3 excess → 1.5× fitness, -0.3 → 0.8× fitness floor.
+            alpha_factor = np.clip(0.8 + 0.4 * np.tanh(excess * 3.0), 0.8, 1.5)
+            is_fitness = is_fitness * alpha_factor
 
         best_idx = int(np.argmax(is_fitness))
         self.best_fitness_history.append(float(is_fitness[best_idx]))
