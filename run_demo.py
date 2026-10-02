@@ -612,7 +612,7 @@ def build_demo_config(args: argparse.Namespace):
         ga=dataclasses.replace(cfg.ga, population_size=args.population,
                                 generations=args.generations if args.generations is not None else 6,
                                 oos_candidates=8,
-                                min_trades=10),
+                                min_trades=cfg.ga.min_trades),
     )
     return cfg
 
