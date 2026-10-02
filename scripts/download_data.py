@@ -208,6 +208,54 @@ def expand_1h_to_1m(df_1h: pd.DataFrame) -> pd.DataFrame:
     return m_df[list(OHLCV_COLUMNS)]
 
 
+async def fetch_funding_history(
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    market: str = "SOL-USD",
+    max_pages: int = 60,
+) -> pd.DataFrame:
+    """Fetch real historical hourly funding rates from public indexer."""
+    records = []
+    curr = end_time
+    base_url = f"https://indexer.dydx.trade/v4/historicalFunding/{market}"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AntigravityTrader/1.0"}
+
+    print(f"\nFetching real hourly funding history for {market}...")
+    async with aiohttp.ClientSession(headers=headers) as session:
+        for page in range(max_pages):
+            iso_str = curr.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            url = f"{base_url}?effectiveBeforeOrAt={iso_str}"
+            try:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        break
+                    data = await resp.json()
+                    items = data.get("historicalFunding", [])
+                    if not items:
+                        break
+                    for it in items:
+                        ts = pd.to_datetime(it["effectiveAt"], utc=True)
+                        rate = float(it["rate"])
+                        records.append({"timestamp": ts, "funding_rate": rate})
+                    oldest = pd.to_datetime(items[-1]["effectiveAt"], utc=True)
+                    if oldest <= start_time or oldest >= curr:
+                        break
+                    curr = oldest - datetime.timedelta(seconds=1)
+                    if (page + 1) % 10 == 0:
+                        print(f"  funding page {page+1}: reached {oldest.strftime('%Y-%m-%d')} ({len(records)} records)")
+            except Exception as e:
+                print(f"  note: funding fetch reached earliest available at page {page}: {e}")
+                break
+            await asyncio.sleep(0.04)
+
+    if not records:
+        return pd.DataFrame(columns=["funding_rate"])
+    df = pd.DataFrame(records).drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
+    df = df.set_index("timestamp").tz_convert("UTC").tz_localize(None)
+    df.index = df.index.floor("1h")
+    return df
+
+
 async def download_all(
     product: str = "SOL-USD",
     output_dir: str = "data",
@@ -263,11 +311,17 @@ async def download_all(
     df_1m = df_1m.iloc[:m_len]
     df_1h = _resample_signals(df_1m, "1h")
 
-    # Clean funding series
-    funding = pd.DataFrame(
-        {"funding_rate": np.zeros(len(df_1h), dtype=np.float64)},
-        index=df_1h.index,
-    )
+    # Fetch real historical hourly funding rates from public indexer
+    fund_df = await fetch_funding_history(start_dt, now)
+    if not fund_df.empty:
+        funding = fund_df.reindex(df_1h.index).ffill().fillna(0.0)
+        mean_r = float(funding["funding_rate"].mean())
+        print(f"[ok] Real funding history: {len(funding)} hourly rates (mean={mean_r:.2e})")
+    else:
+        funding = pd.DataFrame(
+            {"funding_rate": np.zeros(len(df_1h), dtype=np.float64)},
+            index=df_1h.index,
+        )
 
     path_1m = os.path.join(output_dir, "sol_1m.parquet")
     path_1h = os.path.join(output_dir, "sol_1h.parquet")

@@ -199,15 +199,18 @@ class SignalFeatures:
 class SignalIntents:
     """Per-genome, per-bar signal output (all arrays are ``(P, N)``).
 
-    ``entry_price`` is NaN where there is no entry intent; ``long_entry`` /
-    ``short_entry`` are boolean masks over the ``P`` axis.
+    ``entry_price`` is NaN where there is no limit entry intent;
+    ``breakout_price`` is NaN where there is no breakout entry intent.
+    ``long_entry`` / ``short_entry`` are boolean masks over the ``P`` axis.
     """
 
     regime: Any  # float64: +1 long-regime, -1 short-regime, 0 flat
     atr: Any  # float64: ATR used to size entry/TP/SL distances
     long_entry: Any  # bool
     short_entry: Any  # bool
-    entry_price: Any  # float64 limit price (NaN where no entry)
+    entry_price: Any  # float64 limit price (NaN where no limit entry)
+    is_breakout: Any = None  # bool (P, N): True for breakout stop-market, False for limit
+    breakout_price: Any = None  # float64 (P, N): stop trigger price (NaN where no breakout)
 
 
 def compute_signals(features: SignalFeatures, genome_batch: Any,
@@ -309,15 +312,21 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
     long_entry = (regime > 0.5) & vol_pass_long & long_fund_pass
     short_entry = (regime < -0.5) & vol_pass_short & short_fund_pass
 
-    # --- Entry limits ----------------------------------------------------------
-    # In vertical trends (ER >= 0.35), reduce entry offset to 0.15x so we don't miss runaway moves.
-    eff_offset = xp.where(er_1d[None, :] >= 0.35, 0.15 * entry_offset[:, None], entry_offset[:, None])
-    # Timeframe-specific cost hurdle: ensure limit offset covers round-trip fees vs ATR
+    # --- Entry limits & Breakout Stops ---------------------------------------
+    # In vertical trends (ER >= 0.35) or short/long squeeze fuel, switch to high-velocity
+    # breakout stop orders to capture runaway legs without waiting for pullbacks.
+    is_breakout = xp.broadcast_to((er_1d[None, :] >= 0.35) | long_squeeze | short_squeeze, (p, n))
+    breakout_px = xp.full((p, n), xp.nan, dtype=xp.float64)
+    breakout_px = xp.where(long_entry & is_breakout, close[None, :] + 0.15 * atr, breakout_px)
+    breakout_px = xp.where(short_entry & is_breakout, close[None, :] - 0.15 * atr, breakout_px)
+
+    # Passive limit entry for non-breakout conditions:
+    eff_offset = entry_offset[:, None]
     fee_hurdle = (0.0006 * close[None, :]) / xp.maximum(atr, 1e-6)
     eff_offset = xp.maximum(eff_offset, fee_hurdle)
     entry_price = xp.full((p, n), xp.nan, dtype=xp.float64)
-    entry_price = xp.where(long_entry, close[None, :] - eff_offset * atr, entry_price)
-    entry_price = xp.where(short_entry, close[None, :] + eff_offset * atr, entry_price)
+    entry_price = xp.where(long_entry & ~is_breakout, close[None, :] - eff_offset * atr, entry_price)
+    entry_price = xp.where(short_entry & ~is_breakout, close[None, :] + eff_offset * atr, entry_price)
 
     return SignalIntents(
         regime=regime,
@@ -325,4 +334,6 @@ def compute_signals(features: SignalFeatures, genome_batch: Any,
         long_entry=long_entry,
         short_entry=short_entry,
         entry_price=entry_price,
+        is_breakout=is_breakout,
+        breakout_price=breakout_px,
     )

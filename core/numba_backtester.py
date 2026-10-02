@@ -47,6 +47,7 @@ __all__ = ["NUMBA_AVAILABLE", "backtest_numba"]
 
 @njit(parallel=True, fastmath=False, cache=True)
 def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig_entry,
+            sig_is_bk, sig_bk_px,
             tp_mult, sl_mult, lev, max_hold, risk_pct, trail_mult,
             tick, lot, min_notional, maker_rate,
             taker_rate, maint_rate, initial_equity, bph, pen_ticks, stop_slip_ticks,
@@ -80,6 +81,8 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
         entry_sig = -1
         entry_fill_hour = -1
         rest_active = False
+        rest_is_bk = False
+        pyramid_count = 0
         rest_side = 0
         rest_price = 0.0
         rest_qty = 0.0
@@ -133,7 +136,8 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                         taker_exits[pi] += 1
                         pos = 0.0
                         entry_sig = -1
-                # place a new post-only entry from signal s = h_idx - 1
+                        pyramid_count = 0
+                # place a new post-only or breakout entry from signal s = h_idx - 1
                 s = h_idx - 1
                 if s >= 0 and pos == 0.0 and not halted:
                     d = 0
@@ -143,10 +147,17 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                         d = -1
                     placed = False
                     if d != 0:
-                        raw = sig_entry[pi, s]
-                        L = cc if math.isnan(raw) else raw
-                        L = math.floor(L / tick + 0.5) * tick
-                        reject = (d == 1 and L >= oo) or (d == -1 and L <= oo)
+                        is_bk = sig_is_bk[pi, s]
+                        if is_bk:
+                            raw = sig_bk_px[pi, s]
+                            L = cc if math.isnan(raw) else raw
+                            L = math.floor(L / tick + 0.5) * tick
+                            reject = False
+                        else:
+                            raw = sig_entry[pi, s]
+                            L = cc if math.isnan(raw) else raw
+                            L = math.floor(L / tick + 0.5) * tick
+                            reject = (d == 1 and L >= oo) or (d == -1 and L <= oo)
                         if reject:
                             rejections[pi] += 1
                         else:
@@ -160,6 +171,7 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                                 qty = math.floor(max_qty / lot + 1e-9) * lot
                             if qty > 0.0 and qty * L >= min_notional:
                                 rest_active = True
+                                rest_is_bk = is_bk
                                 rest_side = d
                                 rest_price = L
                                 rest_qty = qty
@@ -197,6 +209,7 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                         breakers[pi] += 1
                         pos = 0.0
                         entry_sig = -1
+                        pyramid_count = 0
                         halted = True
                         rest_active = False
 
@@ -225,6 +238,7 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                     taker_exits[pi] += 1
                     pos = 0.0
                     entry_sig = -1
+                    pyramid_count = 0
                 elif tp_hit:
                     cash += pos * (tp_r - entry_px) - abs(pos) * tp_r * maker_rate
                     total_fees[pi] += abs(pos) * tp_r * maker_rate
@@ -232,6 +246,7 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                     maker_fills[pi] += 1
                     pos = 0.0
                     entry_sig = -1
+                    pyramid_count = 0
                 else:
                     # position still open: update peak and ratchet trailing/breakeven stops for next bar
                     if pos > 0.0:
@@ -257,37 +272,79 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                             if trail_sl < sl_px:
                                 sl_px = trail_sl
 
-            # resting post-only entry fills
+            # resting entry fills
             fresh = False
             if rest_active and pos == 0.0 and not halted:
-                if rest_side == 1 and ll <= rest_price - penetration:
-                    cash -= rest_qty * rest_price * maker_rate
-                    total_fees[pi] += rest_qty * rest_price * maker_rate
-                    pos = rest_qty
-                    entry_px = rest_price
-                    sl_px = rest_sl
-                    tp_px = rest_tp
-                    pos_atr = rest_atr
-                    peak_px = entry_px
-                    entry_sig = rest_sig
-                    entry_fill_hour = t // bph
-                    maker_fills[pi] += 1
-                    rest_active = False
-                    fresh = True
-                elif rest_side == -1 and hh >= rest_price + penetration:
-                    cash -= rest_qty * rest_price * maker_rate
-                    total_fees[pi] += rest_qty * rest_price * maker_rate
-                    pos = -rest_qty
-                    entry_px = rest_price
-                    sl_px = rest_sl
-                    tp_px = rest_tp
-                    pos_atr = rest_atr
-                    peak_px = entry_px
-                    entry_sig = rest_sig
-                    entry_fill_hour = t // bph
-                    maker_fills[pi] += 1
-                    rest_active = False
-                    fresh = True
+                if rest_is_bk:
+                    # Breakout stop-market fill (taker)
+                    if rest_side == 1 and hh >= rest_price:
+                        fill = (oo if oo > rest_price else rest_price) + slip_taker
+                        fee = rest_qty * fill * taker_rate
+                        cash -= fee
+                        total_fees[pi] += fee
+                        pos = rest_qty
+                        entry_px = fill
+                        sl_px = rest_sl
+                        tp_px = rest_tp
+                        pos_atr = rest_atr
+                        peak_px = fill
+                        entry_sig = rest_sig
+                        entry_fill_hour = t // bph
+                        taker_exits[pi] += 1
+                        rest_active = False
+                        rest_is_bk = False
+                        pyramid_count = 0
+                        fresh = True
+                    elif rest_side == -1 and ll <= rest_price:
+                        fill = (oo if oo < rest_price else rest_price) - slip_taker
+                        fee = rest_qty * fill * taker_rate
+                        cash -= fee
+                        total_fees[pi] += fee
+                        pos = -rest_qty
+                        entry_px = fill
+                        sl_px = rest_sl
+                        tp_px = rest_tp
+                        pos_atr = rest_atr
+                        peak_px = fill
+                        entry_sig = rest_sig
+                        entry_fill_hour = t // bph
+                        taker_exits[pi] += 1
+                        rest_active = False
+                        rest_is_bk = False
+                        pyramid_count = 0
+                        fresh = True
+                else:
+                    # Limit entry fill (maker)
+                    if rest_side == 1 and ll <= rest_price - penetration:
+                        cash -= rest_qty * rest_price * maker_rate
+                        total_fees[pi] += rest_qty * rest_price * maker_rate
+                        pos = rest_qty
+                        entry_px = rest_price
+                        sl_px = rest_sl
+                        tp_px = rest_tp
+                        pos_atr = rest_atr
+                        peak_px = entry_px
+                        entry_sig = rest_sig
+                        entry_fill_hour = t // bph
+                        maker_fills[pi] += 1
+                        rest_active = False
+                        pyramid_count = 0
+                        fresh = True
+                    elif rest_side == -1 and hh >= rest_price + penetration:
+                        cash -= rest_qty * rest_price * maker_rate
+                        total_fees[pi] += rest_qty * rest_price * maker_rate
+                        pos = -rest_qty
+                        entry_px = rest_price
+                        sl_px = rest_sl
+                        tp_px = rest_tp
+                        pos_atr = rest_atr
+                        peak_px = entry_px
+                        entry_sig = rest_sig
+                        entry_fill_hour = t // bph
+                        maker_fills[pi] += 1
+                        rest_active = False
+                        pyramid_count = 0
+                        fresh = True
 
             # same-bar stop/TP check for an entry filled on this bar
             if fresh and same_bar_check and pos != 0.0:
@@ -314,6 +371,7 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                     taker_exits[pi] += 1
                     pos = 0.0
                     entry_sig = -1
+                    pyramid_count = 0
                 elif tp_hit:
                     cash += pos * (tp_r - entry_px) - abs(pos) * tp_r * maker_rate
                     total_fees[pi] += abs(pos) * tp_r * maker_rate
@@ -321,6 +379,7 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                     maker_fills[pi] += 1
                     pos = 0.0
                     entry_sig = -1
+                    pyramid_count = 0
                 else:
                     # position survived the entry bar: ratchet trailing/breakeven stops for next bar
                     if pos > 0.0:
@@ -346,6 +405,29 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                             if trail_sl < sl_px:
                                 sl_px = trail_sl
 
+            # pyramiding on profit-locked runners:
+            # If trade reached +2.0 ATR excursion AND trailing stop has locked in >= +0.5 ATR profit:
+            # Reinvest floating profit by adding +35% size at market while stop trails.
+            if pos != 0.0 and pyramid_count == 0:
+                can_pyr = (
+                    (pos > 0.0 and peak_px >= entry_px + 2.0 * pos_atr and sl_px >= entry_px + 0.5 * pos_atr) or
+                    (pos < 0.0 and peak_px <= entry_px - 2.0 * pos_atr and sl_px <= entry_px - 0.5 * pos_atr)
+                )
+                if can_pyr:
+                    pyr_qty = math.floor(abs(pos) * 0.35 / lot + 1e-9) * lot
+                    if pyr_qty > 0.0:
+                        pyr_side = 1.0 if pos > 0.0 else -1.0
+                        pyr_px = cc + slip_taker if pyr_side > 0.0 else cc - slip_taker
+                        pyr_fee = pyr_qty * pyr_px * taker_rate
+                        cash -= pyr_fee
+                        total_fees[pi] += pyr_fee
+                        old_notional = abs(pos) * entry_px
+                        add_notional = pyr_qty * pyr_px
+                        new_pos = pos + pyr_side * pyr_qty
+                        entry_px = (old_notional + add_notional) / max(abs(new_pos), 1e-12)
+                        pos = new_pos
+                        pyramid_count = 1
+
             # mark-to-market + maintenance-margin liquidation
             if pos != 0.0:
                 if intrabar_liq:
@@ -366,6 +448,7 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
                     liquidations[pi] += 1
                     pos = 0.0
                     entry_sig = -1
+                    pyramid_count = 0
             eq = cash
             if pos != 0.0:
                 eq = cash + pos * (cc - entry_px)
@@ -403,6 +486,8 @@ def backtest_numba(ohlcv_1m: Any, ohlcv_1h: Any, funding: Any, signals: SignalIn
     long_e = np.ascontiguousarray(np.asarray(signals.long_entry, dtype=np.bool_))
     short_e = np.ascontiguousarray(np.asarray(signals.short_entry, dtype=np.bool_))
     entry = np.ascontiguousarray(np.asarray(signals.entry_price, dtype=np.float64))
+    sig_is_bk = np.ascontiguousarray(np.asarray(signals.is_breakout, dtype=np.bool_)) if signals.is_breakout is not None else np.zeros(long_e.shape, dtype=np.bool_)
+    sig_bk_px = np.ascontiguousarray(np.asarray(signals.breakout_price, dtype=np.float64)) if signals.breakout_price is not None else np.zeros(entry.shape, dtype=np.float64)
 
     tp = np.ascontiguousarray(g[:, GENE_INDEX["tp_atr_mult"]])
     sl = np.ascontiguousarray(g[:, GENE_INDEX["sl_atr_mult"]])
@@ -415,6 +500,7 @@ def backtest_numba(ohlcv_1m: Any, ohlcv_1h: Any, funding: Any, signals: SignalIn
     breaker_window = int(breaker_window_hours) if breaker_pct > 0.0 else 1
     equity, n_trades, maker_fills, taker_exits, liq, rej, brk, fees, funding_paid = _kernel(
         o, h, l, c, fund, regime, atr, long_e, short_e, entry,
+        sig_is_bk, sig_bk_px,
         tp, sl, lev, max_hold, risk, trail,
         float(instrument.tick_size), float(instrument.lot_size), float(instrument.min_notional),
         float(instrument.maker_fee_rate), float(instrument.taker_fee_rate),

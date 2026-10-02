@@ -117,8 +117,9 @@ class _Sim:
         self.pos_funding = xp.zeros(p, dtype=_FLOAT)
         self.halted = xp.zeros(p, dtype=xp.bool_)
 
-        # Resting post-only entry order.
+        # Resting entry order (maker limit or taker breakout stop).
         self.rest_active = xp.zeros(p, dtype=xp.bool_)
+        self.rest_is_breakout = xp.zeros(p, dtype=xp.bool_)
         self.rest_side = xp.zeros(p, dtype=_INT)
         self.rest_price = xp.zeros(p, dtype=_FLOAT)
         self.rest_qty = xp.zeros(p, dtype=_FLOAT)
@@ -130,6 +131,7 @@ class _Sim:
         self.pos_atr = xp.zeros(p, dtype=_FLOAT)
         self.pos_trail = xp.zeros(p, dtype=_FLOAT)
         self.peak_px = xp.zeros(p, dtype=_FLOAT)
+        self.pyramid_count = xp.zeros(p, dtype=_INT)
 
         self.n_trades = xp.zeros(p, dtype=_INT)
         self.maker_fills = xp.zeros(p, dtype=_INT)
@@ -208,12 +210,13 @@ class _Sim:
         self.entry_sig = xp.where(m, -1, self.entry_sig)
         self.entry_fee = xp.where(m, 0.0, self.entry_fee)
         self.pos_funding = xp.where(m, 0.0, self.pos_funding)
+        self.pyramid_count = xp.where(m, 0, self.pyramid_count)
 
-    def open_position(self, mask: Any, side: Any, fill_price: Any, maker_rate: float) -> None:
-        """Open positions for resting-entry fills at ``fill_price`` (maker)."""
+    def open_position(self, mask: Any, side: Any, fill_price: Any, fee_rate: float, is_taker: bool = False) -> None:
+        """Open positions for resting-entry fills at ``fill_price``."""
         m = mask
         qty = self.rest_qty
-        entry_fee = qty * fill_price * maker_rate
+        entry_fee = qty * fill_price * fee_rate
         self.cash = self.cash - xp.where(m, entry_fee, 0.0)
         self.total_fees = self.total_fees + xp.where(m, entry_fee, 0.0)
         self.pos = xp.where(m, qty * side, self.pos)
@@ -227,8 +230,13 @@ class _Sim:
         self.entry_sig = xp.where(m, self.rest_sig, self.entry_sig)
         self.entry_fee = xp.where(m, entry_fee, self.entry_fee)
         self.pos_funding = xp.where(m, 0.0, self.pos_funding)
-        self.maker_fills += m.astype(_INT)
+        self.pyramid_count = xp.where(m, 0, self.pyramid_count)
+        if is_taker:
+            self.taker_exits += m.astype(_INT)
+        else:
+            self.maker_fills += m.astype(_INT)
         self.rest_active = xp.where(m, False, self.rest_active)
+        self.rest_is_breakout = xp.where(m, False, self.rest_is_breakout)
 
 
 def _check_exits(sim: _Sim, o: Any, hi: Any, lo: Any, tick: float,
@@ -434,16 +442,28 @@ def backtest(
                 time_fill = xp.where(sim.pos > 0, c - slip_taker, c + slip_taker)
                 sim.finalize_exit(time_exit, time_fill, "time", taker_rate)
 
-            # B. place new post-only entries from signal s = h_idx - 1
+            # B. place new entries from signal s = h_idx - 1
             s = h_idx - 1
             if s >= 0:
                 side = xp.where(sig_long[:, s], 1, xp.where(sig_short[:, s], -1, 0))
                 flat = sim.pos == 0
                 want = flat & (side != 0) & ~sim.halted
                 raw_l = sig_entry[:, s]
-                L = _round_tick(xp.where(xp.isnan(raw_l), c, raw_l), tick)
-                # Post-only rejection: would cross the spread at placement.
-                reject = ((side == 1) & (L >= o)) | ((side == -1) & (L <= o))
+                raw_bk = getattr(signals, "breakout_price", None)
+                is_bk_sig = getattr(signals, "is_breakout", None)
+
+                # Determine if this order is a breakout stop or a limit pullback
+                is_bk = xp.zeros(p, dtype=xp.bool_)
+                if is_bk_sig is not None and raw_bk is not None:
+                    bk_s = xp.asarray(raw_bk[:, s], dtype=_FLOAT)
+                    is_bk = xp.asarray(is_bk_sig[:, s], dtype=xp.bool_) & ~xp.isnan(bk_s)
+                    target_px = xp.where(is_bk, bk_s, xp.where(xp.isnan(raw_l), c, raw_l))
+                else:
+                    target_px = xp.where(xp.isnan(raw_l), c, raw_l)
+                L = _round_tick(target_px, tick)
+
+                # Post-only rejection applies only to resting limit orders (not breakout stop triggers)
+                reject = ~is_bk & (((side == 1) & (L >= o)) | ((side == -1) & (L <= o)))
                 place = want & ~reject
 
                 # Volatility-targeted risk sizing:
@@ -461,6 +481,7 @@ def backtest(
                     # Flat genomes re-quote to this hour's intent or cancel stale orders.
                     sim.rest_active = xp.where(flat, place, sim.rest_active)
                 sim.rest_active = xp.where(place, True, sim.rest_active)
+                sim.rest_is_breakout = xp.where(place, is_bk, sim.rest_is_breakout)
                 sim.rest_side = xp.where(place, side, sim.rest_side)
                 sim.rest_price = xp.where(place, L, sim.rest_price)
                 sim.rest_qty = xp.where(place, qty, sim.rest_qty)
@@ -492,17 +513,55 @@ def backtest(
         # C. exit fills for open positions (SL first, then TP — conservative)
         _check_exits(sim, o, hi, lo, tick, taker_rate, maker_rate, fm)
 
-        # D. entry fills for resting post-only limits (flat genomes)
+        # D. entry fills for resting orders (flat genomes)
         rest = sim.rest_active & ~sim.halted
         if bool(asnumpy(xp.any(rest))):
-            buy_fill = rest & (sim.rest_side == 1) & (lo <= sim.rest_price - penetration)
-            sell_fill = rest & (sim.rest_side == -1) & (hi >= sim.rest_price + penetration)
-            fill = buy_fill | sell_fill
-            if bool(asnumpy(xp.any(fill))):
-                sim.open_position(fill, sim.rest_side, sim.rest_price, maker_rate)
-                # D2. same-bar exit check for entries filled on this bar.
+            # Limit fills (maker):
+            rest_lim = rest & ~sim.rest_is_breakout
+            buy_lim_fill = rest_lim & (sim.rest_side == 1) & (lo <= sim.rest_price - penetration)
+            sell_lim_fill = rest_lim & (sim.rest_side == -1) & (hi >= sim.rest_price + penetration)
+            lim_fill = buy_lim_fill | sell_lim_fill
+
+            # Breakout stop-market fills (taker):
+            rest_bk = rest & sim.rest_is_breakout
+            buy_bk_fill = rest_bk & (sim.rest_side == 1) & (hi >= sim.rest_price)
+            sell_bk_fill = rest_bk & (sim.rest_side == -1) & (lo <= sim.rest_price)
+            bk_fill = buy_bk_fill | sell_bk_fill
+
+            if bool(asnumpy(xp.any(lim_fill))):
+                sim.open_position(lim_fill, sim.rest_side, sim.rest_price, maker_rate, is_taker=False)
                 if fm.same_bar_stop_check:
-                    _check_exits(sim, o, hi, lo, tick, taker_rate, maker_rate, fm, mask=fill)
+                    _check_exits(sim, o, hi, lo, tick, taker_rate, maker_rate, fm, mask=lim_fill)
+
+            if bool(asnumpy(xp.any(bk_fill))):
+                bk_fill_px = xp.where(sim.rest_side == 1, xp.maximum(o, sim.rest_price) + slip_taker,
+                                                          xp.minimum(o, sim.rest_price) - slip_taker)
+                sim.open_position(bk_fill, sim.rest_side, bk_fill_px, taker_rate, is_taker=True)
+                if fm.same_bar_stop_check:
+                    _check_exits(sim, o, hi, lo, tick, taker_rate, maker_rate, fm, mask=bk_fill)
+
+        # D3. Pyramiding on profit-locked runners:
+        # If trade reached +2.0 ATR excursion AND trailing stop has locked in >= +0.5 ATR profit:
+        # Reinvest floating profit by adding +35% size at market while stop trails.
+        can_pyr = (sim.pos != 0) & (sim.pyramid_count == 0) & (
+            ((sim.pos > 0) & (sim.peak_px >= sim.entry_px + 2.0 * sim.pos_atr) & (sim.sl_px >= sim.entry_px + 0.5 * sim.pos_atr)) |
+            ((sim.pos < 0) & (sim.peak_px <= sim.entry_px - 2.0 * sim.pos_atr) & (sim.sl_px <= sim.entry_px - 0.5 * sim.pos_atr))
+        )
+        if bool(asnumpy(xp.any(can_pyr))):
+            pyr_qty = xp.floor(xp.abs(sim.pos) * 0.35 / lot + 1e-9) * lot
+            valid_pyr = can_pyr & (pyr_qty > 0)
+            if bool(asnumpy(xp.any(valid_pyr))):
+                pyr_side = xp.sign(sim.pos)
+                pyr_px = xp.where(pyr_side > 0, c + slip_taker, c - slip_taker)
+                pyr_fee = pyr_qty * pyr_px * taker_rate
+                sim.cash -= xp.where(valid_pyr, pyr_fee, 0.0)
+                sim.total_fees += xp.where(valid_pyr, pyr_fee, 0.0)
+                old_notional = xp.abs(sim.pos) * sim.entry_px
+                add_notional = pyr_qty * pyr_px
+                new_pos = sim.pos + xp.where(valid_pyr, pyr_side * pyr_qty, 0.0)
+                sim.entry_px = xp.where(valid_pyr, (old_notional + add_notional) / xp.maximum(xp.abs(new_pos), 1e-12), sim.entry_px)
+                sim.pos = new_pos
+                sim.pyramid_count = xp.where(valid_pyr, 1, sim.pyramid_count)
 
         # E. hourly funding handled at the hour boundary (see above).
 
