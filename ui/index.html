@@ -1,0 +1,1288 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SOL-PERP Evolutionary Trading</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    /* Custom scrollbars for internal panels */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+    ::-webkit-scrollbar-thumb { background: rgba(51, 65, 85, 0.8); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(71, 85, 105, 1); }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 h-screen max-h-screen overflow-hidden flex flex-col font-sans select-none antialiased">
+  <!-- Top Navigation & Global Metrics Ribbon -->
+  <header class="h-11 min-h-[44px] max-h-[44px] border-b border-slate-800 px-3 flex items-center justify-between gap-3 bg-slate-900/90 backdrop-blur z-20 flex-shrink-0">
+    <div class="flex items-center gap-2.5">
+      <div class="flex items-center gap-1.5">
+        <span class="w-2.5 h-2.5 rounded-sm bg-gradient-to-tr from-sky-500 to-indigo-500 shadow-sm shadow-sky-500/50"></span>
+        <h1 class="text-xs font-bold tracking-tight text-white uppercase">SOL-PERP</h1>
+        <span class="text-[10px] text-slate-400 font-medium px-1.5 py-0.5 rounded bg-slate-800">WFO</span>
+      </div>
+      <span id="backend-badge" class="px-2 py-0.5 rounded bg-slate-800/80 text-slate-300 font-mono text-[10px]">…</span>
+      <span id="lifecycle-status" class="px-2 py-0.5 rounded-full font-semibold text-[10px] bg-slate-800 text-slate-300">Idle</span>
+      <span id="phase" class="text-[11px] text-slate-400 truncate max-w-[140px] xl:max-w-[200px]" title="phase">idle</span>
+    </div>
+
+    <!-- Quick Stats Ribbon (compact metrics) -->
+    <div class="flex items-center gap-3 text-xs overflow-x-auto">
+      <div class="flex items-center gap-1">
+        <span class="text-[10px] uppercase text-slate-500">Fit</span>
+        <span id="card-fitness" class="font-mono font-semibold text-emerald-400 text-xs">—</span>
+      </div>
+      <div class="w-px h-3 bg-slate-800"></div>
+      <div class="flex items-center gap-1">
+        <span class="text-[10px] uppercase text-slate-500">Sh</span>
+        <span id="card-sharpe" class="font-mono font-semibold text-sky-400 text-xs">—</span>
+      </div>
+      <div class="w-px h-3 bg-slate-800"></div>
+      <div class="flex items-center gap-1">
+        <span class="text-[10px] uppercase text-slate-500">DD</span>
+        <span id="card-dd" class="font-mono font-semibold text-rose-400 text-xs">—</span>
+      </div>
+      <div class="w-px h-3 bg-slate-800"></div>
+      <div class="flex items-center gap-1">
+        <span class="text-[10px] uppercase text-slate-500">Ret</span>
+        <span id="card-return" class="font-mono font-semibold text-amber-400 text-xs">—</span>
+      </div>
+      <div class="w-px h-3 bg-slate-800"></div>
+      <div class="flex items-center gap-1">
+        <span class="text-[10px] uppercase text-slate-500">Pool</span>
+        <span id="card-pool" class="font-mono font-semibold text-indigo-300 text-xs">0</span>
+        <span id="pool-size" class="hidden">0</span>
+      </div>
+      <div class="w-px h-3 bg-slate-800"></div>
+      <div class="flex items-center gap-1">
+        <span class="text-[10px] uppercase text-slate-500">G/s</span>
+        <span id="card-rate" class="font-mono font-semibold text-violet-400 text-xs">—</span>
+      </div>
+      <div class="w-px h-3 bg-slate-800"></div>
+      <div class="flex items-center gap-2 text-[11px]">
+        <span id="generation-progress" class="hidden">Generations — / —</span>
+        <span class="text-slate-500">G:<span id="generation" class="font-mono text-emerald-400 ml-0.5">—</span></span>
+        <span class="text-slate-500">C:<span id="cycle" class="font-mono text-fuchsia-400 ml-0.5">—</span></span>
+        <span class="text-slate-500">W:<span id="window" class="font-mono text-sky-400 ml-0.5">—</span></span>
+      </div>
+      <span id="conn-status" class="w-2 h-2 rounded-full bg-red-500 ml-1 flex-shrink-0" title="WebSocket connection"></span>
+    </div>
+  </header>
+
+  <!-- Progress Bar (2px) -->
+  <div class="h-[2px] w-full bg-slate-900 flex-shrink-0">
+    <div id="progress-bar" class="h-full bg-sky-500 transition-all duration-150" style="width:0%"></div>
+  </div>
+
+  <!-- Main Viewport Workstation -->
+  <main class="flex-1 min-h-0 flex overflow-hidden">
+    <!-- Left / Center Workspace: Charts & Execution Telemetry (~64% width) -->
+    <section class="flex-1 min-h-0 flex flex-col p-2.5 gap-2 overflow-hidden">
+      <!-- Toolbar: Mode toggles and Year Selectors -->
+      <div class="flex items-center justify-between gap-2 flex-wrap flex-shrink-0 bg-slate-900/60 border border-slate-800/80 rounded-lg px-2.5 py-1.5">
+        <div class="flex items-center gap-1">
+          <span class="text-[11px] text-slate-400 mr-1 font-medium">Layout:</span>
+          <button data-mode="both" class="chart-mode px-2.5 py-1 rounded text-xs transition bg-sky-600 text-white font-medium">Split Both</button>
+          <button data-mode="total" class="chart-mode px-2.5 py-1 rounded text-xs transition bg-slate-800 text-slate-300 hover:bg-slate-700">Macro View</button>
+          <button data-mode="window" class="chart-mode px-2.5 py-1 rounded text-xs transition bg-slate-800 text-slate-300 hover:bg-slate-700">Active Window</button>
+        </div>
+
+        <div class="flex items-center gap-1.5 flex-wrap">
+          <span class="text-[11px] text-slate-400 font-medium">Data:</span>
+          <button id="btn-mode-wfo" class="px-2 py-0.5 text-xs rounded bg-sky-600 text-white font-medium hover:bg-sky-500 transition">
+            WFO Live
+          </button>
+          <button id="btn-mode-all-time" class="px-2 py-0.5 text-xs rounded bg-slate-800 text-indigo-300 font-medium hover:bg-slate-700 transition">
+            All Time
+          </button>
+          <div id="year-buttons-container" class="flex items-center gap-1"></div>
+        </div>
+      </div>
+
+      <!-- Out-of-Distribution / Year Backtest Banner (Compact) -->
+      <div id="year-test-banner" class="hidden flex-shrink-0 px-3 py-1.5 rounded-lg bg-slate-900 border border-indigo-700/50 text-xs flex items-center justify-between flex-wrap gap-2 shadow-sm">
+        <div class="flex items-center gap-2">
+          <span id="year-banner-title" class="font-semibold text-indigo-300 text-xs">2024 Full-Year Evaluation</span>
+          <span id="year-banner-badge" class="px-1.5 py-0.2 rounded text-[10px] font-medium bg-purple-900/60 text-purple-200 border border-purple-700/50">
+            Out-of-Distribution
+          </span>
+          <span id="year-banner-loading" class="hidden text-amber-400 text-xs animate-pulse font-medium">Simulating…</span>
+        </div>
+        <div class="flex items-center gap-3 font-mono text-[11px]">
+          <div><span class="text-slate-500">Ret:</span> <span id="year-stat-return" class="text-emerald-400 font-semibold">—</span></div>
+          <div><span class="text-slate-500">Sharpe:</span> <span id="year-stat-sharpe" class="text-sky-400 font-semibold">—</span></div>
+          <div><span class="text-slate-500">Max DD:</span> <span id="year-stat-dd" class="text-rose-400 font-semibold">—</span></div>
+          <div><span class="text-slate-500">Trades:</span> <span id="year-stat-trades" class="text-slate-200 font-semibold">—</span></div>
+          <div><span class="text-slate-500">SOL:</span> <span id="year-stat-benchmark" class="text-amber-400 font-semibold">—</span></div>
+        </div>
+      </div>
+
+      <!-- Dual Charts Workspace (Stacked in flex-1, resizes dynamically) -->
+      <div id="charts-container" class="flex-1 min-h-0 flex flex-col gap-2 overflow-hidden">
+        <!-- Panel 1: Macro / Global Forward-Only Evidence Chart -->
+        <section id="panel-total" class="flex-1 min-h-0 flex flex-col bg-slate-900/70 rounded-lg border border-slate-800/80 p-2.5 overflow-hidden">
+          <div class="flex items-center justify-between mb-1 flex-shrink-0">
+            <h2 class="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+              <span>Macro Candidate Evidence vs SOL Benchmark</span>
+              <span id="agg-note" class="text-slate-500 font-normal text-[11px]"></span>
+            </h2>
+          </div>
+          <div class="flex-1 min-h-0 relative">
+            <canvas id="total-chart"></canvas>
+          </div>
+        </section>
+
+        <!-- Panel 2: Active Walk-Forward Window (In-Sample vs Out-of-Sample) -->
+        <section id="panel-window" class="flex-1 min-h-0 flex flex-col bg-slate-900/70 rounded-lg border border-slate-800/80 p-2.5 overflow-hidden">
+          <div class="flex items-center justify-between mb-1 flex-shrink-0">
+            <h2 id="window-title" class="text-xs font-semibold text-slate-300">
+              Active Window — In-Sample vs Out-of-Sample
+            </h2>
+            <p id="window-note" class="text-[11px] text-slate-500 truncate max-w-md">Current optimization window</p>
+          </div>
+          <div class="flex-1 min-h-0 relative">
+            <canvas id="window-chart"></canvas>
+          </div>
+        </section>
+      </div>
+
+      <!-- Bottom Dock: Execution Telemetry & Market Gauges (Compact Fixed Height) -->
+      <section class="h-24 min-h-[96px] max-h-[96px] flex-shrink-0 bg-slate-900/80 rounded-lg border border-slate-800/80 px-3 py-2 flex flex-col justify-between">
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-semibold text-slate-300">Paper Execution Telemetry</span>
+            <span id="exec-mode-badge" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-800 text-slate-400 uppercase">Idle / Unassigned</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button id="btn-deploy-ensemble" class="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-medium transition flex items-center gap-1">
+              <span>⚡ Deploy Ensemble</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Telemetry Gauges Grid -->
+        <div class="grid grid-cols-6 gap-2 text-center text-xs">
+          <div class="bg-slate-950/70 rounded px-2 py-1 border border-slate-800/60">
+            <div class="text-[10px] uppercase text-slate-500 tracking-wider">Position</div>
+            <div id="exec-net-pos" class="font-mono text-xs font-semibold text-slate-300 truncate">—</div>
+          </div>
+          <div class="bg-slate-950/70 rounded px-2 py-1 border border-slate-800/60">
+            <div class="text-[10px] uppercase text-slate-500 tracking-wider">Trailing SL</div>
+            <div id="exec-trailing-sl" class="font-mono text-xs font-semibold text-slate-300 truncate">—</div>
+          </div>
+          <div class="bg-slate-950/70 rounded px-2 py-1 border border-slate-800/60">
+            <div class="text-[10px] uppercase text-slate-500 tracking-wider">Peak Price</div>
+            <div id="exec-peak-px" class="font-mono text-xs font-semibold text-slate-300 truncate">—</div>
+          </div>
+          <div class="bg-slate-950/70 rounded px-2 py-1 border border-slate-800/60">
+            <div class="text-[10px] uppercase text-slate-500 tracking-wider">Vol Z-Score</div>
+            <div id="exec-vol-z" class="font-mono text-xs font-semibold text-slate-300 truncate">—</div>
+          </div>
+          <div class="bg-slate-950/70 rounded px-2 py-1 border border-slate-800/60">
+            <div class="text-[10px] uppercase text-slate-500 tracking-wider">Funding Z</div>
+            <div id="exec-fund-z" class="font-mono text-xs font-semibold text-slate-300 truncate">—</div>
+          </div>
+          <div class="bg-slate-950/70 rounded px-2 py-1 border border-slate-800/60">
+            <div class="text-[10px] uppercase text-slate-500 tracking-wider">Breaker</div>
+            <div id="exec-breaker" class="font-mono text-xs font-semibold text-emerald-400 truncate">Nominal</div>
+          </div>
+        </div>
+
+        <!-- Ensemble Allocation Strip (conditionally displayed inside dock) -->
+        <div id="ensemble-allocation-bar" class="hidden flex items-center justify-between gap-3 text-[11px] pt-0.5">
+          <div class="flex items-center gap-1.5 flex-1 min-w-0">
+            <span class="text-slate-400 font-medium text-[10px]">Allocation:</span>
+            <div id="ensemble-bars" class="flex-1 h-2 bg-slate-950 rounded overflow-hidden flex"></div>
+          </div>
+          <div id="ensemble-legend" class="flex items-center gap-2 text-[10px] overflow-hidden truncate"></div>
+          <span id="ensemble-member-count" class="text-slate-400 font-mono text-[10px]"></span>
+        </div>
+      </section>
+    </section>
+
+    <!-- Right Inspector Panel: Multi-Tab Workstation (~36% width) -->
+    <aside class="w-[380px] lg:w-[420px] xl:w-[460px] flex-shrink-0 flex flex-col h-full border-l border-slate-800 bg-slate-900/50 overflow-hidden">
+      <!-- Tabs Navigation Header -->
+      <div class="flex border-b border-slate-800 bg-slate-950/80 px-2 pt-1.5 gap-1 flex-shrink-0">
+        <button id="tab-btn-wfo" onclick="switchTab('wfo')" class="tab-btn px-3 py-1.5 text-xs font-medium rounded-t border-b-2 border-sky-500 text-sky-400 bg-slate-900/80">
+          WFO Windows
+        </button>
+        <button id="tab-btn-champion" onclick="switchTab('champion')" class="tab-btn px-3 py-1.5 text-xs font-medium rounded-t border-b-2 border-transparent text-slate-400 hover:text-slate-200">
+          Champion Gate
+        </button>
+        <button id="tab-btn-pool" onclick="switchTab('pool')" class="tab-btn px-3 py-1.5 text-xs font-medium rounded-t border-b-2 border-transparent text-slate-400 hover:text-slate-200">
+          Pool & Genomes
+        </button>
+      </div>
+
+      <!-- Tab Content Area (flex-1 with internal smooth scrolling) -->
+      <div class="flex-1 min-h-0 overflow-hidden relative">
+        <!-- Tab 1: WFO Windows & Slice Board -->
+        <div id="pane-wfo" class="tab-pane h-full flex flex-col p-3 overflow-y-auto space-y-3">
+          <!-- Walk-Forward Window Board -->
+          <div class="bg-slate-950/70 rounded-lg border border-slate-800/80 p-3">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="text-xs font-semibold text-slate-300">Walk-Forward Windows</h3>
+              <span class="text-[11px] text-slate-500">Active row highlighted</span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs">
+                <thead>
+                  <tr class="text-slate-500 border-b border-slate-800/80 text-[11px]">
+                    <th class="text-left py-1.5 pr-2">#</th>
+                    <th class="text-left py-1.5 pr-2">IS Window</th>
+                    <th class="text-left py-1.5 pr-2">OOS Window</th>
+                    <th class="text-left py-1.5 pr-2">Winner</th>
+                    <th class="text-right py-1.5 pr-2">Sharpe</th>
+                    <th class="text-right py-1.5">Cyc</th>
+                  </tr>
+                </thead>
+                <tbody id="window-board"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Local Walk-Forward Slices Grid -->
+          <div class="bg-slate-950/70 rounded-lg border border-slate-800/80 p-3">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="text-xs font-semibold text-slate-300">OOS Winner Slices</h3>
+              <span class="text-[11px] text-slate-500">Per-window out-of-sample</span>
+            </div>
+            <div id="slices" class="grid grid-cols-1 sm:grid-cols-2 gap-2.5"></div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Champion Validation & Candidates -->
+        <div id="pane-champion" class="tab-pane h-full flex flex-col p-3 overflow-y-auto space-y-3 hidden">
+          <!-- Global Champion Summary Card -->
+          <div id="champion-validation-panel" class="bg-slate-950/70 rounded-lg border border-slate-800/80 p-3">
+            <div class="flex items-center justify-between gap-2 mb-2">
+              <h3 class="text-xs font-semibold text-slate-300">Global Champion Validation</h3>
+              <span id="champion-status" class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[10px] font-semibold uppercase">unavailable</span>
+            </div>
+            <div id="champion-warning" class="hidden mb-2 rounded border px-2.5 py-1 text-xs"></div>
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <div class="bg-slate-900/60 p-2 rounded border border-slate-800/60">
+                <div class="text-[10px] text-slate-500">Candidate</div>
+                <div id="champion-id" class="font-mono text-slate-200 truncate">—</div>
+              </div>
+              <div class="bg-slate-900/60 p-2 rounded border border-slate-800/60">
+                <div class="text-[10px] text-slate-500">Score / Deployable</div>
+                <div class="flex items-center gap-1 font-mono text-slate-200">
+                  <span id="champion-score">—</span>
+                  <span>·</span>
+                  <span id="champion-deployable" class="font-semibold">—</span>
+                </div>
+              </div>
+              <div class="bg-slate-900/60 p-2 rounded border border-slate-800/60">
+                <div class="text-[10px] text-slate-500">Periods (Pos Ratio)</div>
+                <div class="font-mono text-slate-200">
+                  <span id="champion-periods">—</span> <span id="champion-positive" class="text-slate-400">—</span>
+                </div>
+              </div>
+              <div class="bg-slate-900/60 p-2 rounded border border-slate-800/60">
+                <div class="text-[10px] text-slate-500">Median / Worst Sh</div>
+                <div id="champion-sharpe" class="font-mono text-slate-200">—</div>
+              </div>
+              <div class="bg-slate-900/60 p-2 rounded border border-slate-800/60">
+                <div class="text-[10px] text-slate-500">Worst Drawdown</div>
+                <div id="champion-dd" class="font-mono text-rose-400">—</div>
+              </div>
+              <div class="bg-slate-900/60 p-2 rounded border border-slate-800/60">
+                <div class="text-[10px] text-slate-500">Trades / Volatility</div>
+                <div class="font-mono text-slate-200">
+                  <span id="champion-trades">—</span> · <span id="champion-volatility" class="text-slate-400">—</span>
+                </div>
+              </div>
+              <div class="col-span-2 bg-slate-900/60 p-2 rounded border border-slate-800/60">
+                <div class="text-[10px] text-slate-500">Status Details / Reason</div>
+                <div id="champion-reason" class="text-slate-300 text-xs truncate">—</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Candidate Consistency Table -->
+          <div class="bg-slate-950/70 rounded-lg border border-slate-800/80 p-3">
+            <h3 class="text-xs font-semibold text-slate-300 mb-2">Candidate Consistency History</h3>
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs">
+                <thead>
+                  <tr class="text-slate-500 border-b border-slate-800/80 text-[11px]">
+                    <th class="text-left py-1.5 pr-2">ID</th>
+                    <th class="text-left py-1.5 pr-2">Status</th>
+                    <th class="text-right py-1.5 pr-2">P</th>
+                    <th class="text-right py-1.5 pr-2">Med Sh</th>
+                    <th class="text-right py-1.5 pr-2">W. DD</th>
+                    <th class="text-right py-1.5 pr-2">Score</th>
+                    <th class="text-left py-1.5">Evidence</th>
+                  </tr>
+                </thead>
+                <tbody id="champion-candidates"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Top Genomes & Deployment Pool -->
+        <div id="pane-pool" class="tab-pane h-full flex flex-col p-3 overflow-y-auto space-y-3 hidden">
+          <!-- Top Genomes Leaderboard -->
+          <div class="bg-slate-950/70 rounded-lg border border-slate-800/80 p-3">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="text-xs font-semibold text-slate-300">Top Genomes (Current Window)</h3>
+              <span class="text-[11px] text-slate-500">IS & OOS metrics</span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs">
+                <thead>
+                  <tr class="text-slate-500 border-b border-slate-800/80 text-[11px]">
+                    <th class="text-left py-1.5 pr-2">#</th>
+                    <th class="text-left py-1.5 pr-2">Reg</th>
+                    <th class="text-right py-1.5 pr-2">Risk</th>
+                    <th class="text-right py-1.5 pr-2">Trail</th>
+                    <th class="text-right py-1.5 pr-2">IS Sh</th>
+                    <th class="text-right py-1.5 pr-2">OOS Sh</th>
+                    <th class="text-right py-1.5 pr-2">WFE</th>
+                    <th class="text-right py-1.5">Trades</th>
+                  </tr>
+                </thead>
+                <tbody id="top-genomes"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Deployment Pool -->
+          <div class="bg-slate-950/70 rounded-lg border border-slate-800/80 p-3">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="text-xs font-semibold text-slate-300">Deployment Pool</h3>
+              <span class="text-[11px] text-slate-500">Validated candidates</span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs">
+                <thead>
+                  <tr class="text-slate-500 border-b border-slate-800/80 text-[11px]">
+                    <th class="text-left py-1.5 pr-2">ID</th>
+                    <th class="text-right py-1.5 pr-2">Consistency</th>
+                    <th class="text-right py-1.5 pr-2">OOS μ</th>
+                    <th class="text-right py-1.5 pr-2">OOS σ</th>
+                    <th class="text-right py-1.5 pr-2">Win</th>
+                    <th class="text-right py-1.5">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="pool"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    let totalChart = null, windowChart = null, lastSnapshot = null;
+    let retryDelay = 1000;
+    let viewingYear = null;
+    let availableYears = [];
+    let trainingYear = null;
+    let allTimeRange = null;
+    let chartMode = "both";
+
+    const fmt = (x, d = 3) => (x === null || x === undefined || Number.isNaN(x)) ? "—" : Number(x).toFixed(d);
+    const pct = (x) => (x === null || x === undefined) ? "—" : (Number(x) * 100).toFixed(1) + "%";
+    const toMs = (value) => {
+      if (typeof value === "number") return Number.isFinite(value) ? value : null;
+      if (typeof value !== "string") return null;
+      const normalized = /(?:Z|[+-]\d\d:?\d\d)$/.test(value) ? value : value.replace(" ", "T") + "Z";
+      const ms = new Date(normalized).getTime();
+      return Number.isFinite(ms) ? ms : null;
+    };
+    const short = (value) => {
+      const ms = toMs(value);
+      if (ms === null) return "—";
+      return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(ms);
+    };
+    const dateRange = (start, end) => `${short(start)} - ${short(end)}`;
+    const appendCell = (row, value, className = "") => {
+      const cell = document.createElement("td");
+      cell.className = "py-1.5 pr-2 " + className;
+      cell.textContent = value == null || value === "" ? "—" : String(value);
+      row.appendChild(cell);
+      return cell;
+    };
+    const curvePoints = (curve) => Array.isArray(curve) ? curve
+      .filter((point) => Array.isArray(point) && point.length >= 2)
+      .map(([t, v]) => ({ x: t, y: v })) : [];
+    const reasonText = (reasons) => Array.isArray(reasons) ? reasons.filter(Boolean).join("; ") : (reasons || "—");
+
+    const lifecycleDetails = (state) => {
+      const raw = String(state.run_status || state.status || "").toLowerCase();
+      const hasValidationJobs = state.validation_jobs_completed != null || state.validation_jobs_total != null;
+      if (!raw && hasValidationJobs) return ["Validating", "bg-amber-500/15 text-amber-300 ring-1 ring-amber-400/30"];
+      if (raw.includes("validat")) return ["Validating", "bg-amber-500/15 text-amber-300 ring-1 ring-amber-400/30"];
+      if (raw.includes("persist")) return ["Persisting", "bg-violet-500/15 text-violet-300 ring-1 ring-violet-400/30"];
+      if (raw.includes("complete") || raw.includes("finished")) return ["Complete", "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-400/30"];
+      if (raw.includes("cancel")) return ["Cancelled", "bg-slate-700 text-slate-200"];
+      if (raw.includes("fail") || raw.includes("error")) return ["Failed", "bg-rose-500/15 text-rose-300 ring-1 ring-rose-400/30"];
+      if (raw.includes("run") || raw.includes("evolv")) return ["Running", "bg-sky-500/15 text-sky-300 ring-1 ring-sky-400/30"];
+      if (!raw && state.generation != null) return ["Running", "bg-sky-500/15 text-sky-300 ring-1 ring-sky-400/30"];
+      return ["Idle", "bg-slate-800 text-slate-300"];
+    };
+
+    function renderLifecycle(state) {
+      const [label, color] = lifecycleDetails(state);
+      const completed = state.completed_generations ?? state.generation;
+      const planned = state.planned_generations;
+      const badge = document.getElementById("lifecycle-status");
+      badge.className = "px-2 py-0.5 rounded-full font-semibold text-[10px] " + color;
+      badge.textContent = label;
+      document.getElementById("generation-progress").textContent = `Generations ${completed ?? "—"} / ${planned ?? "—"}`;
+      const jobsDone = state.validation_jobs_completed;
+      const jobsTotal = state.validation_jobs_total;
+      const validationProgress = label === "Validating" && (jobsDone != null || jobsTotal != null)
+        ? `validating ${jobsDone ?? 0}/${jobsTotal ?? "—"} jobs` : null;
+      if (validationProgress) document.getElementById("phase").textContent = validationProgress;
+      else if (label === "Complete") document.getElementById("phase").textContent = "Evolution complete";
+      else if (label === "Persisting") document.getElementById("phase").textContent = "Persisting results";
+      else if (label === "Cancelled") document.getElementById("phase").textContent = "Evolution cancelled";
+      else if (label === "Failed") document.getElementById("phase").textContent = "Evolution failed";
+      return validationProgress;
+    }
+
+    // Chart Plugins
+    const warmupPlugin = {
+      id: "wfWarmup",
+      beforeDatasetsDraw(chart) {
+        const w = chart.$warmup, xa = chart.scales.x, ya = chart.chartArea;
+        if (!w || !xa || w[1] <= w[0]) return;
+        const x0 = Math.max(xa.getPixelForValue(w[0]), xa.left);
+        const x1 = Math.min(xa.getPixelForValue(w[1]), xa.right);
+        if (x1 <= x0) return;
+        const ctx = chart.ctx; ctx.save();
+        ctx.fillStyle = "rgba(100,116,139,0.12)";
+        ctx.fillRect(x0, ya.top, x1 - x0, ya.bottom - ya.top);
+        ctx.fillStyle = "rgba(148,163,184,0.6)"; ctx.font = "10px sans-serif";
+        ctx.fillText("IS warmup", x0 + 4, ya.top + 12);
+        ctx.restore();
+      },
+    };
+    const boundaryPlugin = {
+      id: "wfBoundaries",
+      afterDatasetsDraw(chart) {
+        const xs = chart.$boundaries || [], xa = chart.scales.x, ya = chart.chartArea;
+        if (!xa) return;
+        const ctx = chart.ctx; ctx.save();
+        ctx.strokeStyle = "rgba(148,163,184,0.28)"; ctx.setLineDash([4, 4]);
+        xs.forEach((t) => {
+          const px = xa.getPixelForValue(t);
+          if (px >= xa.left && px <= xa.right) {
+            ctx.beginPath(); ctx.moveTo(px, ya.top); ctx.lineTo(px, ya.bottom); ctx.stroke();
+          }
+        });
+        ctx.restore();
+      },
+    };
+    const coveragePlugin = {
+      id: "coverageRegions",
+      beforeDatasetsDraw(chart) {
+        const regions = chart.$coverageRegions || [], xa = chart.scales.x, area = chart.chartArea;
+        if (!xa || !area) return;
+        const ctx = chart.ctx;
+        regions.forEach((region) => {
+          if (region.end <= region.start) return;
+          const x0 = Math.max(xa.getPixelForValue(region.start), xa.left);
+          const x1 = Math.min(xa.getPixelForValue(region.end), xa.right);
+          if (x1 <= x0) return;
+          ctx.save();
+          ctx.fillStyle = region.color;
+          ctx.fillRect(x0, area.top, x1 - x0, area.bottom - area.top);
+          ctx.fillStyle = region.textColor;
+          ctx.font = "10px sans-serif";
+          ctx.fillText(region.label, x0 + 5, area.top + 13);
+          ctx.restore();
+        });
+      },
+    };
+
+    const makeAxisOpts = () => ({
+      x: { type: "linear", ticks: { color: "#64748b", font: { size: 10 }, maxTicksLimit: 6,
+           callback: (v) => new Date(v).toLocaleDateString() }, grid: { color: "rgba(51,65,85,0.2)" } },
+      y: { 
+        afterFit: (axis) => { axis.width = 64; }, // Pixel-perfect vertical alignment across charts
+        ticks: { color: "#64748b", font: { size: 10 }, maxTicksLimit: 5,
+                 callback: (v) => "$" + (Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + "k" : Number(v).toFixed(0)) }, 
+        grid: { color: "rgba(51,65,85,0.2)" } 
+      },
+    });
+
+    function ensureCharts() {
+      if (!totalChart) {
+        totalChart = new Chart(document.getElementById("total-chart"), {
+          type: "line",
+          plugins: [warmupPlugin, boundaryPlugin, coveragePlugin],
+          data: { datasets: [
+              { label: "Global Forward-Only Candidate", data: [], borderColor: "#38bdf8",
+                backgroundColor: "rgba(56,189,248,0.06)", pointRadius: 0, borderWidth: 1.6, tension: 0.15, spanGaps: false },
+              { label: "SOL Benchmark", data: [], borderColor: "#fbbf24",
+                borderDash: [6, 4], pointRadius: 0, borderWidth: 1.3, tension: 0.15 },
+              { label: "SOL Full History", data: [], borderColor: "#a78bfa",
+                borderDash: [2, 3], pointRadius: 0, borderWidth: 1.1, tension: 0.15 },
+           ] },
+          options: { responsive: true, maintainAspectRatio: false, animation: { duration: 120 },
+            scales: makeAxisOpts(), plugins: { legend: { labels: { color: "#cbd5e1", font: { size: 10 }, boxWidth: 12 } } } },
+        });
+      }
+      if (!windowChart) {
+        windowChart = new Chart(document.getElementById("window-chart"), {
+          type: "line",
+          data: { datasets: [
+            { label: "In-Sample (Train)", data: [], borderColor: "#34d399", backgroundColor: "rgba(52,211,153,0.05)", pointRadius: 0, borderWidth: 1.5, tension: 0.2 },
+            { label: "Out-of-Sample (Test)", data: [], borderColor: "#fbbf24", backgroundColor: "rgba(251,191,36,0.05)", pointRadius: 0, borderWidth: 1.5, tension: 0.2 },
+            { label: "SOL Benchmark (Window)", data: [], borderColor: "#94a3b8", borderDash: [4, 4], pointRadius: 0, borderWidth: 1.2, tension: 0.15 },
+          ]},
+          options: { responsive: true, maintainAspectRatio: false, animation: { duration: 120 },
+            scales: makeAxisOpts(), plugins: { legend: { labels: { color: "#cbd5e1", font: { size: 10 }, boxWidth: 12 } } } },
+        });
+      }
+    }
+
+    function render(s) {
+      if (!s) return;
+      lastSnapshot = s;
+      ensureCharts();
+
+      // Fix undeclared variables that previously caused ReferenceErrors
+      const slices = s.slices || [];
+      const wb = s.window_board || [];
+      const activeIndex = Number.isInteger(s.window_index) ? s.window_index : 0;
+      const winner = s.champion_id ?? s.champion?.id ?? "pending";
+
+      const validationProgress = renderLifecycle(s);
+      document.getElementById("generation").textContent = s.generation ?? "—";
+      document.getElementById("cycle").textContent = (s.cycle || 0) + 1;
+      document.getElementById("window").textContent = (activeIndex + 1) + "/" + (s.n_windows || 1);
+      document.getElementById("pool-size").textContent = s.deployment_pool_size ?? 0;
+      document.getElementById("card-pool").textContent = s.deployment_pool_size ?? 0;
+      document.getElementById("backend-badge").textContent = s.backend || "?";
+      if (!validationProgress && lifecycleDetails(s)[0] === "Running") {
+        document.getElementById("phase").textContent = "generation " + (s.generation ?? "—") + " done";
+      }
+      progressTarget = 100;
+
+      document.getElementById("card-fitness").textContent = fmt(s.best_fitness, 2);
+      document.getElementById("card-rate").textContent = s.gens_per_s ? fmt(s.gens_per_s, 1) : "—";
+      const am = s.aggregate_metrics || {};
+      document.getElementById("card-sharpe").textContent = fmt(am.sharpe, 2);
+      document.getElementById("card-dd").textContent = pct(am.max_drawdown);
+      document.getElementById("card-return").textContent = pct(am.total_return);
+
+      if (viewingYear === null) {
+        const stratPts = curvePoints(s.aggregate_equity_curve);
+        const bmkPts = curvePoints(s.benchmark_equity_curve);
+        totalChart.data.datasets[0].label = "Strategy Equity";
+        totalChart.data.datasets[0].data = stratPts;
+        totalChart.data.datasets[1].label = "SOL Benchmark";
+        totalChart.data.datasets[1].data = bmkPts;
+        if (totalChart.data.datasets[2]) {
+          totalChart.data.datasets[2].label = "";
+          totalChart.data.datasets[2].data = [];
+        }
+        totalChart.$boundaries = [];
+        totalChart.$warmup = null;
+
+        // Eliminate artificial left voids: frame timeline directly from start of data (t=0)
+        if (stratPts.length > 0) {
+          totalChart.options.scales.x.min = stratPts[0].x;
+          totalChart.options.scales.x.max = Math.max(
+            stratPts[stratPts.length - 1].x,
+            bmkPts.length > 0 ? bmkPts[bmkPts.length - 1].x : stratPts[stratPts.length - 1].x
+          );
+        } else {
+          delete totalChart.options.scales.x.min;
+          delete totalChart.options.scales.x.max;
+        }
+
+        const isCurve = curvePoints(s.is_equity_curve);
+        const oosCurve = curvePoints(s.oos_equity_curve);
+        if (isCurve.length > 0) {
+          const wEnd = oosCurve.length > 0 ? oosCurve[oosCurve.length - 1].x : isCurve[isCurve.length - 1].x;
+          totalChart.$coverageRegions = [{
+            start: isCurve[0].x,
+            end: wEnd,
+            color: "rgba(56, 189, 248, 0.12)",
+            textColor: "rgba(56, 189, 248, 0.8)",
+            label: `Window ${activeIndex + 1}`,
+          }];
+        } else {
+          totalChart.$coverageRegions = [];
+        }
+
+        const metadata = [
+          winner != null ? `champion ${winner}` : null,
+          s.champion_score != null ? `score ${fmt(s.champion_score, 2)}` : null,
+          s.champion_status ? s.champion_status : null,
+        ].filter(Boolean);
+        document.getElementById("agg-note").textContent = metadata.length ? `(${metadata.join(" · ")})` : "";
+        totalChart.update();
+      }
+
+      renderChampionValidation(s);
+      renderChampionCandidates(s.champion_candidates || []);
+
+      // Active Window Chart Render
+      const isCurve = curvePoints(s.is_equity_curve);
+      const oosCurve = curvePoints(s.oos_equity_curve);
+      const winBmkCurve = curvePoints(s.window_benchmark_equity_curve);
+      windowChart.data.datasets[0].data = isCurve;
+      windowChart.data.datasets[1].data = oosCurve;
+      if (windowChart.data.datasets[2]) {
+        windowChart.data.datasets[2].data = winBmkCurve;
+      }
+
+      // Auto-frame active window from window start to end
+      if (isCurve.length > 0) {
+        windowChart.options.scales.x.min = isCurve[0].x;
+        const lastX = oosCurve.length > 0 ? oosCurve[oosCurve.length - 1].x : isCurve[isCurve.length - 1].x;
+        windowChart.options.scales.x.max = Math.max(lastX, winBmkCurve.length > 0 ? winBmkCurve[winBmkCurve.length - 1].x : lastX);
+      } else {
+        delete windowChart.options.scales.x.min;
+        delete windowChart.options.scales.x.max;
+      }
+
+      const activeSlice = slices.find((sl) => sl.index === activeIndex);
+      document.getElementById("window-title").textContent = `Active Window ${activeIndex + 1} — In-Sample vs Out-of-Sample`;
+      document.getElementById("window-note").textContent = activeSlice
+        ? `OOS ${dateRange(activeSlice.oos_start, activeSlice.oos_end)} · Winner: ${activeSlice.champion_id ?? "pending"} (Sharpe ${fmt(activeSlice.sharpe, 2)})`
+        : `Current optimization window; evaluating population genomes.`;
+      windowChart.update();
+
+      // Render tab tables
+      renderWindowBoard(wb, activeIndex);
+      renderSlices(slices, activeIndex);
+      renderTopGenomes(s.top_genomes || []);
+    }
+
+    function renderWindowBoard(board, activeIndex) {
+      const body = document.getElementById("window-board");
+      body.replaceChildren();
+      board.forEach((w) => {
+        const active = w.index === activeIndex;
+        const row = document.createElement("tr");
+        row.className = "border-b border-slate-800/60 " + (active ? "bg-sky-500/15 ring-1 ring-inset ring-sky-400/30 font-medium" : "hover:bg-slate-900/40");
+        appendCell(row, `W${w.index + 1}`, active ? "text-sky-300 font-bold" : "text-slate-500");
+        appendCell(row, dateRange(w.is_start, w.is_end), "text-slate-400 whitespace-nowrap text-[11px]");
+        appendCell(row, dateRange(w.oos_start, w.oos_end), "text-slate-400 whitespace-nowrap text-[11px]");
+        appendCell(row, w.champion_id ?? "—", "font-mono text-slate-300");
+        appendCell(row, fmt(w.oos_sharpe, 2), "text-right " + (active ? "text-sky-300 font-bold" : (w.oos_sharpe > 0 ? "text-emerald-400" : "text-slate-400")));
+        appendCell(row, (w.updated_cycle ?? -1) + 1, "text-right text-slate-500");
+        body.appendChild(row);
+      });
+    }
+
+    function renderTopGenomes(genomes) {
+      const body = document.getElementById("top-genomes");
+      body.replaceChildren();
+      genomes.forEach((g) => {
+        const row = document.createElement("tr");
+        row.className = "border-b border-slate-800/60 hover:bg-slate-900/40";
+        appendCell(row, g.rank, "text-slate-500 font-mono");
+        appendCell(row, g.params?.regime_mode === 0 ? "EMA" : "ST", "text-slate-300");
+        const riskVal = g.params?.risk_per_trade_pct != null ? (Number(g.params.risk_per_trade_pct) * 100).toFixed(1) + "%" : "—";
+        const trailVal = g.params?.trailing_atr_mult != null ? Number(g.params.trailing_atr_mult).toFixed(1) + "×" : "—";
+        appendCell(row, riskVal, "text-right font-mono text-amber-300/90");
+        appendCell(row, trailVal, "text-right font-mono text-sky-300/90");
+        appendCell(row, fmt(g.is_sharpe, 2), "text-right font-mono");
+        appendCell(row, fmt(g.oos_sharpe, 2), "text-right font-mono " + (g.oos_sharpe > 0 ? "text-emerald-400" : "text-rose-400"));
+        appendCell(row, fmt(g.wfe, 2), "text-right font-mono text-slate-400");
+        appendCell(row, g.trades, "text-right text-slate-400");
+        body.appendChild(row);
+      });
+    }
+
+    function renderChampionValidation(snapshot) {
+      const validation = snapshot.champion_validation || {};
+      const status = snapshot.champion_status || "unavailable";
+      const statusEl = document.getElementById("champion-status");
+      const warning = document.getElementById("champion-warning");
+      const deployable = validation.deployable;
+      const reasons = reasonText(validation.rejection_reasons);
+      const statusClass = status === "qualified" ? "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-400/30"
+        : status === "provisional" ? "bg-amber-500/15 text-amber-300 ring-1 ring-amber-400/30"
+        : status === "rejected" ? "bg-rose-500/15 text-rose-300 ring-1 ring-rose-400/30"
+        : "bg-slate-800 text-slate-300";
+      statusEl.className = "px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase " + statusClass;
+      statusEl.textContent = status;
+      warning.className = "hidden mb-2 rounded border px-2.5 py-1 text-xs";
+      warning.textContent = "";
+      if (status === "provisional") {
+        warning.className = "mb-2 rounded border border-amber-400/40 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-200";
+        warning.textContent = "Provisional: candidate requires additional completed forward periods.";
+      } else if (status === "qualified") {
+        warning.className = "mb-2 rounded border border-emerald-400/40 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-200";
+        warning.textContent = "Qualified: candidate passed the forward-only gate.";
+      } else if (status === "rejected") {
+        warning.className = "mb-2 rounded border border-rose-400/40 bg-rose-500/10 px-2.5 py-1 text-xs text-rose-200";
+        warning.textContent = "Rejected: " + reasons;
+      }
+      document.getElementById("champion-id").textContent = snapshot.champion_id ?? "—";
+      document.getElementById("champion-periods").textContent = `${validation.periods_completed ?? "—"}/${validation.required_periods ?? 6}`;
+      document.getElementById("champion-positive").textContent = `(${pct(validation.positive_period_ratio)})`;
+      document.getElementById("champion-sharpe").textContent = `${fmt(validation.median_sharpe, 2)} / ${fmt(validation.worst_sharpe, 2)}`;
+      document.getElementById("champion-volatility").textContent = fmt(validation.sharpe_std, 2);
+      document.getElementById("champion-dd").textContent = pct(validation.worst_drawdown);
+      document.getElementById("champion-trades").textContent = validation.total_trades ?? "—";
+      document.getElementById("champion-score").textContent = fmt(validation.score ?? snapshot.champion_score, 2);
+      document.getElementById("champion-deployable").textContent = deployable === true ? "Deployable" : deployable === false ? "Not Ready" : "—";
+      document.getElementById("champion-deployable").className = "font-mono font-semibold " + (deployable === true ? "text-emerald-400" : deployable === false ? "text-rose-400" : "text-slate-400");
+      document.getElementById("champion-reason").textContent = reasons;
+    }
+
+    function renderChampionCandidates(candidates) {
+      const body = document.getElementById("champion-candidates");
+      body.replaceChildren();
+      (Array.isArray(candidates) ? candidates : []).forEach((candidate) => {
+        const row = document.createElement("tr");
+        const status = candidate.status || "—";
+        const statusColor = status === "qualified" ? "text-emerald-400" : status === "provisional" ? "text-amber-400" : status === "rejected" ? "text-rose-400" : "text-slate-400";
+        row.className = "border-b border-slate-800/60 hover:bg-slate-900/40";
+        appendCell(row, candidate.id ?? candidate.candidate_id, "font-mono text-slate-300");
+        appendCell(row, status, "font-semibold text-[11px] " + statusColor);
+        appendCell(row, `${candidate.periods_completed ?? "—"}/${candidate.required_periods ?? 6}`, "text-right font-mono text-[11px]");
+        appendCell(row, fmt(candidate.median_sharpe, 2), "text-right font-mono");
+        appendCell(row, pct(candidate.worst_drawdown), "text-right font-mono text-rose-400");
+        appendCell(row, fmt(candidate.score, 2), "text-right font-mono text-sky-400");
+        const evidence = candidate.evidence ?? candidate.readable_evidence ?? candidate.summary;
+        appendCell(row, reasonText(evidence), "text-slate-400 text-[11px] truncate max-w-[120px]");
+        body.appendChild(row);
+      });
+    }
+
+    function renderPool(pool) {
+      const body = document.getElementById("pool");
+      body.replaceChildren();
+      (pool || []).forEach((g) => {
+        const cons = g.consistency != null ? (g.consistency * 100).toFixed(0) + "%" : "—";
+        const ccol = (g.consistency || 0) >= 0.6 ? "text-emerald-400" : (g.consistency || 0) >= 0.34 ? "text-amber-400" : "text-slate-400";
+        const row = document.createElement("tr");
+        row.className = "border-b border-slate-800/60 hover:bg-slate-900/40";
+        appendCell(row, g.id, "font-mono text-slate-300");
+        appendCell(row, cons, "text-right font-mono " + ccol);
+        appendCell(row, fmt(g.oos_sharpe_mean, 2), "text-right font-mono");
+        appendCell(row, fmt(g.oos_sharpe_std, 2), "text-right font-mono text-slate-500");
+        appendCell(row, g.windows_seen || 0, "text-right font-mono text-slate-500");
+        const cell = document.createElement("td");
+        cell.className = "py-1.5 text-right";
+        const button = document.createElement("button");
+        button.dataset.id = g.id == null ? "" : String(g.id);
+        button.className = "px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-medium transition";
+        button.textContent = "Deploy";
+        button.addEventListener("click", () => deploy(button));
+        cell.appendChild(button);
+        row.appendChild(cell);
+        body.appendChild(row);
+      });
+    }
+
+    const sliceCharts = new Map();
+    function renderSlices(slices, activeIndex) {
+      const container = document.getElementById("slices");
+      const seen = new Set();
+      slices.forEach((sl) => {
+        const idx = sl.index;
+        seen.add(idx);
+        let card = document.getElementById("slice-" + idx);
+        if (!card) {
+          card = document.createElement("div");
+          card.id = "slice-" + idx;
+          card.className = "bg-slate-950/70 rounded border border-slate-800 p-2 transition";
+          const heading = document.createElement("div");
+          heading.className = "flex items-center justify-between mb-1";
+          const label = document.createElement("span");
+          label.className = "text-[11px] text-slate-400 flex items-center gap-1";
+          const windowLabel = document.createElement("span");
+          windowLabel.className = "font-bold text-slate-300";
+          windowLabel.textContent = `W${idx + 1}`;
+          const status = document.createElement("span");
+          status.className = "status";
+          label.append(windowLabel, status);
+          const sharpe = document.createElement("span");
+          sharpe.className = "text-[11px] font-mono sh";
+          heading.append(label, sharpe);
+          const chartWrap = document.createElement("div");
+          chartWrap.className = "relative h-16";
+          chartWrap.appendChild(document.createElement("canvas"));
+          card.append(heading, chartWrap);
+          container.appendChild(card);
+        }
+        const active = idx === activeIndex;
+        const complete = sl.complete !== false && !active;
+        card.className = "rounded border p-2 transition " +
+          (active ? "bg-sky-500/10 border-sky-400/60 ring-1 ring-sky-400/25" : "bg-slate-950/70 border-slate-800");
+        card.querySelector(".status").textContent = active ? "ACTIVE" : (complete ? "DONE" : "READY");
+        card.querySelector(".status").className = "status text-[9px] font-bold px-1 py-0.2 rounded " +
+          (active ? "bg-sky-500/20 text-sky-300" : complete ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400");
+        const sh = card.querySelector(".sh");
+        sh.textContent = "Sh " + fmt(sl.sharpe, 2);
+        sh.className = "text-[11px] font-mono font-semibold " + (sl.sharpe > 0 ? "text-emerald-400" : "text-rose-400");
+        const color = sl.sharpe > 0 ? "#34d399" : "#fb7185";
+        let chart = sliceCharts.get(idx);
+        if (!chart) {
+          chart = new Chart(card.querySelector("canvas"), {
+            type: "line",
+            data: { datasets: [{ data: [], borderColor: color, backgroundColor: "rgba(255,255,255,0.02)",
+                    pointRadius: 0, borderWidth: 1.2, tension: 0.2, fill: true }] },
+            options: { responsive: true, maintainAspectRatio: false, animation: { duration: 100 },
+              plugins: { legend: { display: false } },
+              scales: { x: { display: false }, y: { display: false } } },
+          });
+          sliceCharts.set(idx, chart);
+        }
+        if (chart._drawn && complete) return;
+        chart.data.datasets[0].data = (sl.curve || []).map(([t, v]) => ({ x: t, y: v }));
+        chart.data.datasets[0].borderColor = color;
+        chart.update();
+        if (complete) chart._drawn = true;
+      });
+      sliceCharts.forEach((chart, idx) => {
+        if (!seen.has(idx)) {
+          if (chart?.destroy) chart.destroy();
+          sliceCharts.delete(idx);
+          const c = document.getElementById("slice-" + idx);
+          if (c) c.remove();
+        }
+      });
+    }
+
+    async function deploy(btn) {
+      const id = btn.dataset.id;
+      btn.disabled = true; btn.textContent = "…";
+      try {
+        const r = await fetch("/api/deploy", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ genome_id: id }) });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || "deploy failed");
+        btn.textContent = "✓";
+        loadExecutor();
+      } catch (e) {
+        btn.textContent = "✗";
+        console.error(e);
+        setTimeout(() => { btn.disabled = false; btn.textContent = "Deploy"; }, 3000);
+      }
+    }
+
+    async function loadPool() {
+      try { renderPool(await (await fetch("/api/pool")).json()); } catch (e) {}
+    }
+
+    function renderExecutor(data) {
+      if (!data) return;
+      const modeBadge = document.getElementById("exec-mode-badge");
+      const mode = String(data.mode || "idle").toLowerCase();
+      if (mode === "single") {
+        modeBadge.className = "px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-400/30 uppercase";
+        modeBadge.textContent = "Single Champion";
+      } else if (mode === "ensemble") {
+        modeBadge.className = "px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/15 text-indigo-300 ring-1 ring-indigo-400/30 uppercase";
+        modeBadge.textContent = "Ensemble";
+      } else {
+        modeBadge.className = "px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-800 text-slate-400 uppercase";
+        modeBadge.textContent = "Paper Idle";
+      }
+
+      const netPos = data.net_target_qty != null && data.net_target_qty !== 0
+        ? (Number(data.net_target_qty) > 0 ? "+" : "") + Number(data.net_target_qty).toFixed(2) + " SOL"
+        : (data.regime_dir > 0 ? "LONG" : (data.regime_dir < 0 ? "SHORT" : "FLAT"));
+      const netPosEl = document.getElementById("exec-net-pos");
+      netPosEl.textContent = netPos;
+      netPosEl.className = "font-mono text-xs font-semibold truncate " +
+        (data.net_target_qty > 0 || data.regime_dir > 0 ? "text-emerald-400" : (data.net_target_qty < 0 || data.regime_dir < 0 ? "text-rose-400" : "text-slate-300"));
+
+      document.getElementById("exec-trailing-sl").textContent = data.trailing_sl ? "$" + Number(data.trailing_sl).toFixed(2) : "—";
+      document.getElementById("exec-peak-px").textContent = data.peak_price ? "$" + Number(data.peak_price).toFixed(2) : "—";
+      document.getElementById("exec-vol-z").textContent = data.volume_zscore != null ? (data.volume_zscore >= 0 ? "+" : "") + Number(data.volume_zscore).toFixed(2) + "σ" : "—";
+      document.getElementById("exec-fund-z").textContent = data.funding_zscore != null ? (data.funding_zscore >= 0 ? "+" : "") + Number(data.funding_zscore).toFixed(2) + "σ" : "—";
+
+      const breakerEl = document.getElementById("exec-breaker");
+      if (data.breaker_tripped) {
+        breakerEl.className = "font-mono text-xs text-rose-400 font-bold truncate";
+        breakerEl.textContent = "TRIPPED";
+      } else {
+        breakerEl.className = "font-mono text-xs text-emerald-400 truncate";
+        breakerEl.textContent = "Nominal";
+      }
+
+      const members = data.ensemble_members || [];
+      const allocBar = document.getElementById("ensemble-allocation-bar");
+      const barContainer = document.getElementById("ensemble-bars");
+      const legendContainer = document.getElementById("ensemble-legend");
+      if (members.length > 0) {
+        allocBar.classList.remove("hidden");
+        document.getElementById("ensemble-member-count").textContent = `${members.length} strats`;
+        barContainer.replaceChildren();
+        legendContainer.replaceChildren();
+        const colors = ["bg-sky-500", "bg-emerald-500", "bg-amber-500", "bg-fuchsia-500", "bg-violet-500"];
+        members.forEach((m, idx) => {
+          const w = Number(m.weight || 0);
+          const col = colors[idx % colors.length];
+          const seg = document.createElement("div");
+          seg.className = `h-full ${col} transition-all duration-300`;
+          seg.style.width = (w * 100).toFixed(1) + "%";
+          seg.title = `${m.id}: ${(w * 100).toFixed(1)}%`;
+          barContainer.appendChild(seg);
+
+          const item = document.createElement("div");
+          item.className = "flex items-center gap-1";
+          item.innerHTML = `<span class="w-1.5 h-1.5 rounded-full ${col}"></span><span class="font-mono text-slate-300">${m.id}</span><span>(${(w * 100).toFixed(0)}%)</span>`;
+          legendContainer.appendChild(item);
+        });
+      } else {
+        allocBar.classList.add("hidden");
+      }
+    }
+
+    async function loadExecutor() {
+      try {
+        const r = await fetch("/api/executor");
+        if (r.ok) renderExecutor(await r.json());
+      } catch (e) {}
+    }
+
+    const deployEnsembleBtn = document.getElementById("btn-deploy-ensemble");
+    if (deployEnsembleBtn) {
+      deployEnsembleBtn.addEventListener("click", async () => {
+        deployEnsembleBtn.disabled = true;
+        const prevText = deployEnsembleBtn.innerHTML;
+        deployEnsembleBtn.textContent = "Deploying…";
+        try {
+          const res = await fetch("/api/deploy_ensemble", { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Ensemble deploy failed");
+          deployEnsembleBtn.innerHTML = "<span>✓ Deployed</span>";
+          deployEnsembleBtn.className = "px-2.5 py-1 rounded bg-emerald-600 text-white text-[11px] font-medium";
+          loadExecutor();
+        } catch (err) {
+          deployEnsembleBtn.textContent = "✗ Error";
+          deployEnsembleBtn.className = "px-2.5 py-1 rounded bg-rose-600 text-white text-[11px] font-medium";
+          setTimeout(() => {
+            deployEnsembleBtn.disabled = false;
+            deployEnsembleBtn.innerHTML = prevText;
+            deployEnsembleBtn.className = "px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-medium";
+          }, 3500);
+        }
+      });
+    }
+
+    // Progress Bar Animation
+    let progressTarget = 0, progressShown = 0, lastGen = -1;
+    function phaseFraction(p) {
+      const f = (p.fraction != null) ? p.fraction : null;
+      switch (p.phase) {
+        case "signals": return f != null ? 0.40 * f : 0.0;
+        case "is_start": return 0.40;
+        case "is_backtest": return 0.40 + 0.30 * (f || 0);
+        case "is_done": return 0.70;
+        case "oos_start": return 0.70;
+        case "oos_backtest": return 0.70 + 0.20 * (f || 0);
+        case "oos_done": return 0.90;
+        case "breeding": return 0.95;
+        case "window_start": return 0.0;
+        default: return progressTarget / 100;
+      }
+    }
+    function renderProgress(p) {
+      if (p.generation !== lastGen) { lastGen = p.generation; progressShown = 0; progressTarget = 0; }
+      progressTarget = Math.max(progressTarget, phaseFraction(p) * 100);
+      const validationProgress = renderLifecycle(p);
+      if (!validationProgress && lifecycleDetails(p)[0] === "Running")
+        document.getElementById("phase").textContent = p.phase;
+      document.getElementById("cycle").textContent = (p.cycle || 0) + 1;
+      if (p.window_index != null && p.n_windows)
+        document.getElementById("window").textContent = (p.window_index + 1) + "/" + p.n_windows;
+    }
+    function animateBar() {
+      progressShown += (progressTarget - progressShown) * 0.18;
+      if (Math.abs(progressTarget - progressShown) < 0.05) progressShown = progressTarget;
+      document.getElementById("progress-bar").style.width = progressShown + "%";
+      requestAnimationFrame(animateBar);
+    }
+    requestAnimationFrame(animateBar);
+
+    // Chart Mode Toggle (Both, Total, Window)
+    function applyMode() {
+      const panelTotal = document.getElementById("panel-total");
+      const panelWindow = document.getElementById("panel-window");
+
+      if (chartMode === "both") {
+        panelTotal.classList.remove("hidden");
+        panelTotal.classList.add("flex-1");
+        panelWindow.classList.remove("hidden");
+        panelWindow.classList.add("flex-1");
+      } else if (chartMode === "total") {
+        panelTotal.classList.remove("hidden");
+        panelTotal.classList.add("flex-1");
+        panelWindow.classList.add("hidden");
+        panelWindow.classList.remove("flex-1");
+      } else if (chartMode === "window") {
+        panelTotal.classList.add("hidden");
+        panelTotal.classList.remove("flex-1");
+        panelWindow.classList.remove("hidden");
+        panelWindow.classList.add("flex-1");
+      }
+
+      document.querySelectorAll(".chart-mode").forEach((b) => {
+        const on = (b.dataset?.mode || "") === chartMode;
+        b.className = "chart-mode px-2.5 py-1 rounded text-xs transition " +
+          (on ? "bg-sky-600 text-white font-medium shadow-sm" : "bg-slate-800 text-slate-300 hover:bg-slate-700");
+      });
+
+      // Trigger Chart.js resize
+      setTimeout(() => {
+        if (totalChart) totalChart.resize();
+        if (windowChart) windowChart.resize();
+      }, 50);
+    }
+    document.querySelectorAll(".chart-mode").forEach((b) =>
+      b.addEventListener("click", () => { chartMode = b.dataset?.mode || "both"; applyMode(); }));
+
+    // Tab Switching for Right Inspector Panel
+    function switchTab(tabId) {
+      document.querySelectorAll(".tab-btn").forEach((btn) => {
+        btn.className = "tab-btn px-3 py-1.5 text-xs font-medium rounded-t border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition";
+      });
+      document.querySelectorAll(".tab-pane").forEach((pane) => {
+        pane.classList.add("hidden");
+      });
+
+      const activeBtn = document.getElementById(`tab-btn-${tabId}`);
+      if (activeBtn) {
+        activeBtn.className = "tab-btn px-3 py-1.5 text-xs font-medium rounded-t border-b-2 border-sky-500 text-sky-400 bg-slate-900/80 transition";
+      }
+      const activePane = document.getElementById(`pane-${tabId}`);
+      if (activePane) {
+        activePane.classList.remove("hidden");
+      }
+    }
+
+    async function initYearControls() {
+      try {
+        const resp = await fetch("/api/available_years");
+        if (!resp.ok) return;
+        const data = await resp.json();
+        availableYears = data.years || [];
+        trainingYear = data.training_year || null;
+        allTimeRange = data.all_time_range || null;
+        renderYearButtons();
+      } catch (e) {
+        console.warn("Failed to load available years:", e);
+      }
+    }
+
+    function renderYearButtons() {
+      const container = document.getElementById("year-buttons-container");
+      if (!container) return;
+      container.innerHTML = "";
+      
+      const btnWfo = document.getElementById("btn-mode-wfo");
+      if (btnWfo) {
+        btnWfo.onclick = () => resetToWfoMode();
+      }
+
+      const btnAllTime = document.getElementById("btn-mode-all-time");
+      if (btnAllTime) {
+        btnAllTime.className = `px-2 py-0.5 text-xs rounded transition ${
+          viewingYear === "all"
+            ? "bg-indigo-600 text-white font-medium ring-1 ring-indigo-400"
+            : "bg-slate-800 text-indigo-300 hover:bg-slate-700"
+        }`;
+        const rangeText = (allTimeRange?.start_formatted && allTimeRange?.end_formatted)
+          ? ` (${allTimeRange.start_formatted} – ${allTimeRange.end_formatted})`
+          : "";
+        btnAllTime.textContent = `All Time${rangeText}`;
+        btnAllTime.title = (allTimeRange?.start_date && allTimeRange?.end_date)
+          ? `Full historical data from ${allTimeRange.start_date} to ${allTimeRange.end_date}`
+          : "Full historical data from beginning of data to present";
+        btnAllTime.onclick = () => loadYearBacktest("all");
+      }
+
+      availableYears.forEach((yr) => {
+        const btn = document.createElement("button");
+        btn.id = `btn-year-${yr}`;
+        const isTrained = trainingYear === yr;
+        btn.className = `px-1.5 py-0.5 text-xs rounded transition ${
+          viewingYear === yr 
+            ? "bg-indigo-600 text-white font-medium" 
+            : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+        }`;
+        btn.textContent = isTrained ? `${yr}*` : `${yr}`;
+        btn.title = isTrained ? `In-sample training year (${yr})` : `Evaluate candidate on full ${yr} candle data (Zero-Lookahead)`;
+        btn.onclick = () => loadYearBacktest(yr);
+        container.appendChild(btn);
+      });
+    }
+
+    function resetToWfoMode() {
+      viewingYear = null;
+      const banner = document.getElementById("year-test-banner");
+      if (banner) banner.classList.add("hidden");
+      
+      const btnWfo = document.getElementById("btn-mode-wfo");
+      if (btnWfo) {
+        btnWfo.className = "px-2 py-0.5 text-xs rounded bg-sky-600 text-white font-medium hover:bg-sky-500 transition";
+      }
+      const btnAllTime = document.getElementById("btn-mode-all-time");
+      if (btnAllTime) {
+        btnAllTime.className = "px-2 py-0.5 text-xs rounded bg-slate-800 text-indigo-300 hover:bg-slate-700 transition";
+      }
+      renderYearButtons();
+      if (lastSnapshot) {
+        render(lastSnapshot);
+      }
+    }
+
+    async function loadYearBacktest(year) {
+      viewingYear = year;
+      const isAllTime = String(year).toLowerCase() === "all";
+      const btnWfo = document.getElementById("btn-mode-wfo");
+      if (btnWfo) {
+        btnWfo.className = "px-2 py-0.5 text-xs rounded bg-slate-800 text-slate-300 hover:bg-slate-700 transition";
+      }
+      renderYearButtons();
+
+      const banner = document.getElementById("year-test-banner");
+      const loading = document.getElementById("year-banner-loading");
+      const title = document.getElementById("year-banner-title");
+      const badge = document.getElementById("year-banner-badge");
+      
+      if (banner) banner.classList.remove("hidden");
+      if (loading) loading.classList.remove("hidden");
+      if (title) {
+        title.textContent = isAllTime 
+          ? (allTimeRange?.start_formatted && allTimeRange?.end_formatted 
+              ? `All-Time Evaluation (${allTimeRange.start_formatted} – ${allTimeRange.end_formatted})` 
+              : "All-Time Multi-Year Evaluation")
+          : `${year} Full-Year Candle Evaluation`;
+      }
+      
+      const isTrainYear = !isAllTime && trainingYear === year;
+      if (badge) {
+        if (isAllTime) {
+          const rangeStr = (allTimeRange?.start_date && allTimeRange?.end_date)
+            ? `${allTimeRange.start_date} to ${allTimeRange.end_date}`
+            : "Beginning to present";
+          badge.textContent = `All-Time Continuous History (${rangeStr})`;
+          badge.className = "px-1.5 py-0.2 rounded text-[10px] font-medium bg-indigo-900/60 text-indigo-200 border border-indigo-700/50";
+        } else if (isTrainYear) {
+          badge.textContent = "In-Sample Training Year";
+          badge.className = "px-1.5 py-0.2 rounded text-[10px] font-medium bg-amber-900/60 text-amber-200 border border-amber-700/50";
+        } else {
+          badge.textContent = "Out-of-Distribution (Strict Zero-Lookahead)";
+          badge.className = "px-1.5 py-0.2 rounded text-[10px] font-medium bg-emerald-900/60 text-emerald-200 border border-emerald-700/50";
+        }
+      }
+
+      try {
+        const resp = await fetch(`/api/backtest_year?year=${year}`);
+        if (!resp.ok) {
+          throw new Error(`Server returned ${resp.status}`);
+        }
+        const result = await resp.json();
+        
+        // Update stats banner
+        const m = result.metrics || {};
+        if (result.title && title) {
+          title.textContent = result.title;
+        }
+        if (badge && isAllTime && result.coverage) {
+          badge.textContent = `All-Time: ${result.coverage.start_formatted || result.coverage.start.slice(0, 10)} to ${result.coverage.end_formatted || result.coverage.end.slice(0, 10)}`;
+        }
+        document.getElementById("year-stat-return").textContent = pct(m.total_return);
+        document.getElementById("year-stat-sharpe").textContent = fmt(m.sharpe, 2);
+        document.getElementById("year-stat-dd").textContent = pct(m.max_drawdown);
+        document.getElementById("year-stat-trades").textContent = m.trades != null ? m.trades : "—";
+        document.getElementById("year-stat-benchmark").textContent = pct(result.benchmark_return);
+
+        // Update totalChart
+        ensureCharts();
+        const stratPts = curvePoints(result.equity_curve);
+        const bmkPts = curvePoints(result.benchmark_curve);
+        totalChart.data.datasets[0].label = isAllTime ? "Strategy Equity (All-Time)" : `Strategy Equity (${year})`;
+        totalChart.data.datasets[0].data = stratPts;
+        totalChart.data.datasets[1].label = isAllTime ? "SOL Buy & Hold (All-Time)" : `SOL Buy & Hold (${year})`;
+        totalChart.data.datasets[1].data = bmkPts;
+        if (totalChart.data.datasets[2]) {
+          totalChart.data.datasets[2].label = "";
+          totalChart.data.datasets[2].data = [];
+        }
+        totalChart.$boundaries = [];
+        totalChart.$warmup = null;
+        totalChart.$coverageRegions = [];
+        if (stratPts.length > 0) {
+          totalChart.options.scales.x.min = stratPts[0].x;
+          totalChart.options.scales.x.max = Math.max(
+            stratPts[stratPts.length - 1].x,
+            bmkPts.length > 0 ? bmkPts[bmkPts.length - 1].x : stratPts[stratPts.length - 1].x
+          );
+        } else {
+          delete totalChart.options.scales.x.min;
+          delete totalChart.options.scales.x.max;
+        }
+        
+        const cov = result.coverage || {};
+        const rangeText = (cov.start_formatted && cov.end_formatted)
+          ? ` · ${cov.start_formatted} to ${cov.end_formatted}`
+          : ((cov.start && cov.end) ? ` · ${cov.start.slice(0, 10)} to ${cov.end.slice(0, 10)}` : "");
+        document.getElementById("agg-note").textContent = 
+          `Candidate ${result.genome_id} · ${result.candle_count.toLocaleString()} bars${rangeText}`;
+        totalChart.update();
+      } catch (err) {
+        console.error("Year backtest failed:", err);
+        alert(`Failed to load ${year} backtest: ` + err.message);
+      } finally {
+        if (loading) loading.classList.add("hidden");
+      }
+    }
+
+    function connect() {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${proto}://${location.host}/ws/evolution`);
+      ws.onopen = () => { document.getElementById("conn-status").className = "w-2 h-2 rounded-full bg-emerald-500 ml-1 flex-shrink-0"; retryDelay = 1000; loadPool(); loadExecutor(); };
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "progress") { renderProgress(msg.data); return; }
+        if (msg.type === "lifecycle") { renderLifecycle(msg.data || {}); return; }
+        if (msg.type === "executor") { renderExecutor(msg.data || {}); return; }
+        if (msg.type === "snapshot") {
+          render(msg.data || {});
+          loadPool();
+          loadExecutor();
+        }
+      };
+      ws.onclose = () => {
+        document.getElementById("conn-status").className = "w-2 h-2 rounded-full bg-red-500 ml-1 flex-shrink-0";
+        setTimeout(connect, retryDelay); retryDelay = Math.min(retryDelay * 2, 15000);
+      };
+      ws.onerror = () => ws.close();
+    }
+
+    async function loadInitialState() {
+      try {
+        const response = await fetch("/api/state");
+        if (!response.ok) return;
+        const state = await response.json();
+        render(state);
+      } catch (e) {
+        // WebSocket updates remain available
+      }
+    }
+
+    // Startup
+    ensureCharts();
+    applyMode();
+    loadInitialState();
+    loadExecutor();
+    connect();
+    loadPool();
+    initYearControls();
+  </script>
+</body>
+</html>

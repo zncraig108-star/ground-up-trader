@@ -1,0 +1,31 @@
+# ---------------------------------------------------------------------------
+# SOL-PERP Evolutionary Trading System — dependencies (Python 3.11+)
+# Lightweight, CUDA-capable stack. GPU is OPTIONAL: everything runs on NumPy
+# if CuPy/CUDA is absent (see core/xp.py). Install never hard-fails without a GPU.
+# ---------------------------------------------------------------------------
+
+# --- Core numerics & data ---
+numpy>=1.26,<3.0
+pandas>=2.1,<3.0
+pyarrow>=15.0            # Parquet I/O for the data loader/cache
+numba>=0.59             # JIT for reductions that don't vectorize cleanly (CPU + CUDA kernels)
+
+# --- Exchange / async I/O (live + paper executor) ---
+cdp-sdk>=0.10           # Coinbase Developer Platform SDK. VERIFY version vs live API.
+aiohttp>=3.9
+websockets>=12.0
+
+# --- Web UI ---
+fastapi>=0.110
+uvicorn[standard]>=0.29
+
+# --- Config / secrets ---
+python-dotenv>=1.0
+
+# ---------------------------------------------------------------------------
+# OPTIONAL GPU acceleration (NVIDIA CUDA 12.x). Install manually only if you
+# have a CUDA 12 GPU + drivers. The code falls back to NumPy automatically.
+#   pip install cupy-cuda12x
+# (Left commented so `pip install -r requirements.txt` works on any machine.)
+# ---------------------------------------------------------------------------
+# cupy-cuda12x>=13.0
