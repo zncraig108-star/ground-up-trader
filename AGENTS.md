@@ -104,7 +104,8 @@ note, and keep going. Do not silently guess; do not stall.
 ## 10. Git Commit & Push Workflow
 
 Whenever finishing a workflow, task, or user request:
-1. Stage all modified and relevant new files (`git add`).
-2. Create a clean, descriptive git commit summarizing the changes.
-3. Push the commit to the remote repository (`git push`).
+1. **Branching on Major Changes**: If a task involves a major refactor, architectural pivot, experimental exploration, or significant change in direction, create and work on a dedicated feature/experiment branch (e.g., `feat/<name>` or `exp/<name>`). Once verified and passing all checks, merge back into `main` (or the parent branch) as appropriate.
+2. Stage all modified and relevant new files (`git add`).
+3. Create a clean, descriptive git commit summarizing the changes.
+4. Push the commit (and any active branch or merged `main`) to the remote repository (`git push`).
 
