@@ -203,6 +203,14 @@ class EvolutionEngine:
         self._window_leaderboard: Dict[str, Dict[str, Any]] = {}
         self._validation_signal_cache: Dict[str, SignalIntents] = {}
         self._validation_curves: Dict[str, Dict[int, List[List[float]]]] = {}
+        self._feat_h0: int = 0
+        self._feat_h1: int = self.n_hours
+        self.window_features: SignalFeatures = self.features
+        self._cached_agg_curve: Optional[List[List[float]]] = None
+        self._cached_agg_metrics: Optional[Dict[str, Any]] = None
+        self._cached_benchmark_curve: Optional[List[List[float]]] = None
+        self._cached_slices: Optional[List[Dict[str, Any]]] = None
+        self._update_window_features()
         self.run_status = "idle"
         self.completed_generations = 0
         self.planned_generations = 0
@@ -308,14 +316,37 @@ class EvolutionEngine:
             "oos_end": str(self.hour_ts[win.oos_h1 - 1]),
         }
 
+    def _update_window_features(self) -> None:
+        win = self.window
+        warmup = min(240, win.is_h0)
+        self._feat_h0 = win.is_h0 - warmup
+        self._feat_h1 = win.oos_h1
+        h0, h1 = self._feat_h0, self._feat_h1
+        self.window_features = SignalFeatures(
+            open=self.features.open[h0:h1],
+            high=self.features.high[h0:h1],
+            low=self.features.low[h0:h1],
+            close=self.features.close[h0:h1],
+            volume_zscore=self.features.volume_zscore[h0:h1],
+            funding_zscore=self.features.funding_zscore[h0:h1],
+            timeframe_minutes=self.features.timeframe_minutes,
+        )
+
     def _slice_signals(self, signals: SignalIntents, row_indices: Any, h0: int, h1: int) -> SignalIntents:
         r = xp.asarray(row_indices)
+        if signals.regime.shape[1] == self.n_hours:
+            rel_h0, rel_h1 = h0, h1
+        else:
+            offset = getattr(self, "_feat_h0", 0)
+            rel_h0, rel_h1 = h0 - offset, h1 - offset
         return SignalIntents(
-            regime=signals.regime[r][:, h0:h1],
-            atr=signals.atr[r][:, h0:h1],
-            long_entry=signals.long_entry[r][:, h0:h1],
-            short_entry=signals.short_entry[r][:, h0:h1],
-            entry_price=signals.entry_price[r][:, h0:h1],
+            regime=signals.regime[r][:, rel_h0:rel_h1],
+            atr=signals.atr[r][:, rel_h0:rel_h1],
+            long_entry=signals.long_entry[r][:, rel_h0:rel_h1],
+            short_entry=signals.short_entry[r][:, rel_h0:rel_h1],
+            entry_price=signals.entry_price[r][:, rel_h0:rel_h1],
+            is_breakout=signals.is_breakout[r][:, rel_h0:rel_h1] if signals.is_breakout is not None else None,
+            breakout_price=signals.breakout_price[r][:, rel_h0:rel_h1] if signals.breakout_price is not None else None,
         )
 
     def _run_backtest(self, win: WindowSpec, signals: SignalIntents,
@@ -353,9 +384,8 @@ class EvolutionEngine:
             self._emit(phase, done / total if total else 1.0)
         return _cb
 
-    def _run_is_slices(self, win: WindowSpec, signals: SignalIntents,
-                       genome_rows: Any, k: int) -> Optional[np.ndarray]:
-        """Backtest the IS window in ``k`` contiguous slices; return ``(P, k, T)`` returns.
+    def _run_is_slices(self, win: WindowSpec, is_equity_1h: Any, k: int) -> Optional[np.ndarray]:
+        """Extract ``k`` contiguous slices from the IS equity curve; return ``(P, k, T)`` returns.
 
         Used to require cross-sub-window consistency instead of rewarding a single
         lucky 60-day window. Returns ``None`` when slices would be too short to score.
@@ -363,14 +393,12 @@ class EvolutionEngine:
         span = win.is_h1 - win.is_h0
         if k < 2 or span // k < 3:
             return None
-        edges = np.linspace(win.is_h0, win.is_h1, k + 1).astype(int)
-        rows = np.arange(genome_rows.shape[0])
+        eq = asnumpy(is_equity_1h)
+        edges = np.linspace(0, span, k + 1).astype(int)
         rets: List[np.ndarray] = []
         for a, b in zip(edges[:-1], edges[1:]):
-            sub = WindowSpec(is_h0=int(a), is_h1=int(b), oos_h1=int(b))
-            res = self._run_backtest(sub, signals, genome_rows, rows)
-            eq = asnumpy(res.equity_1h)
-            rets.append(np.diff(eq, axis=1) / np.maximum(eq[:, :-1], 1e-12))
+            sub = eq[:, a:b]
+            rets.append(np.diff(sub, axis=1) / np.maximum(sub[:, :-1], 1e-12))
         t = min(r.shape[1] for r in rets)
         return np.stack([r[:, :t] for r in rets], axis=1)
 
@@ -442,7 +470,7 @@ class EvolutionEngine:
         for _ in range(n):
             noise = self.rng.normal(0.0, self.ga.jitter_sigma, size=base_vec.shape)
             jittered = clamp_genomes(base_vec + noise * ranges)
-            signals = compute_signals(self.features, jittered)
+            signals = compute_signals(self.window_features, jittered)
             res = self._run_oos_backtest(self.window, signals, jittered, np.arange(1))
             metrics = self._compute_metrics(res.equity_1h, res.num_trades)
             fits.append(float(asnumpy(metrics.fitness)[0]))
@@ -456,7 +484,7 @@ class EvolutionEngine:
         self._recent_ts.append(time.monotonic())
 
         self._emit("signals")
-        signals = compute_signals(self.features, pop,
+        signals = compute_signals(self.window_features, pop,
                                   progress_cb=lambda frac: self._emit("signals", frac))
         self._emit("is_start")
         all_rows = np.arange(pop.shape[0])
@@ -471,7 +499,7 @@ class EvolutionEngine:
         # and its worst contiguous IS slice, not just one lucky window.
         k_slices = int(getattr(self.ga, "multi_window_slices", 1))
         if k_slices > 1:
-            slice_returns = self._run_is_slices(win, signals, pop, k_slices)
+            slice_returns = self._run_is_slices(win, is_result.equity_1h, k_slices)
             if slice_returns is not None:
                 mws = asnumpy(multi_window_score(slice_returns))
                 mws = np.nan_to_num(mws, nan=0.0, posinf=0.0, neginf=0.0)
@@ -524,8 +552,6 @@ class EvolutionEngine:
             self._emit("oos_done")
 
         self._emit("breeding")
-        # Refresh from completed, post-discovery validation periods only.
-        self._maybe_update_global_champion()
         snap = self._build_snapshot(best_idx, is_fitness, is_sharpe, oos_sharpe,
                                     oos_fitness, oos_trades, is_result, oos_equity_best)
 
@@ -543,6 +569,10 @@ class EvolutionEngine:
         ts = self.hour_ts[win.is_h1:win.oos_h1]
         gid = _genome_id(self.population[best_idx])
         self._spliced_cache = None
+        self._cached_agg_curve = None
+        self._cached_agg_metrics = None
+        self._cached_benchmark_curve = None
+        self._cached_slices = None
         self.oos_segments[key] = {
             "timestamps": [int(t.value // 10**6) for t in ts],
             "equity": [float(v) for v in oos_equity],
@@ -930,11 +960,11 @@ class EvolutionEngine:
             self.champion_score = -np.inf
             return
         selected = min(choices, key=lambda e: (-float(e["score"]), e["id"]))
+        if not force and selected["id"] == self.champion_genome_id and self.champion_equity_curve:
+            return
         self.champion_genome_id = selected["id"]
         self.champion_score = float(selected["score"])
         self._ensure_champion_curves(selected)
-        # Detailed validation curves belong only to the current selected champion.
-        self._validation_curves = {selected["id"]: self._validation_curves.get(selected["id"], {})}
         self.champion_equity_curve = self._compound_validation_curves(selected)
 
     def _ensure_champion_curves(self, entry: Dict[str, Any]) -> None:
@@ -1251,13 +1281,19 @@ class EvolutionEngine:
                 "trades": int(oos_trades[i]),
             })
 
-        agg_curve = self._build_aggregate_equity()
+        if self._cached_agg_curve is None:
+            self._cached_agg_curve = self._build_aggregate_equity()
+            self._cached_agg_metrics = self._aggregate_metrics(self._cached_agg_curve)
+            self._cached_benchmark_curve = self._build_benchmark_equity(self._cached_agg_curve)
+            self._cached_slices = self._build_slices()
+        agg_curve = self._cached_agg_curve
+        agg_metrics = self._cached_agg_metrics
+        slices = self._cached_slices
         selected = self.candidate_registry.get(self.champion_genome_id or "")
         candidate_summaries = [self._candidate_summary(e) for e in
                                sorted(self.candidate_registry.values(),
                                       key=lambda e: (-float(e.get("score", 0.0)), e["id"]))]
         board = [self.window_board[k] for k in sorted(self.window_board.keys())]
-        slices = self._build_slices()
         gens_per_s = 0.0
         if len(self._recent_ts) >= 2:
             span = self._recent_ts[-1] - self._recent_ts[0]
@@ -1276,7 +1312,7 @@ class EvolutionEngine:
             n_windows=len(self.windows),
             cycle=self.cycle,
             aggregate_equity_curve=agg_curve,
-            aggregate_metrics=self._aggregate_metrics(agg_curve),
+            aggregate_metrics=agg_metrics,
             window_board=board,
             slices=slices,
             gens_per_s=float(gens_per_s),
@@ -1286,7 +1322,7 @@ class EvolutionEngine:
             champion_status=(selected or {}).get("status"),
             champion_validation=self._candidate_summary(selected) if selected else {},
             champion_candidates=candidate_summaries[:max(1, self.config.champion_validation.maximum_candidates)],
-            benchmark_equity_curve=self._build_benchmark_equity(agg_curve),
+            benchmark_equity_curve=self._cached_benchmark_curve,
             window_benchmark_equity_curve=self._build_window_benchmark_equity(win),
             run_status=self.run_status,
             completed_generations=self.completed_generations,
@@ -1294,7 +1330,7 @@ class EvolutionEngine:
             validation_jobs_completed=self.validation_jobs_completed,
             validation_jobs_total=self.validation_jobs_total,
             coverage_metadata=self._coverage_metadata(selected, agg_curve),
-            full_history_benchmark_equity_curve=self._build_full_history_benchmark_equity(),
+            full_history_benchmark_equity_curve=[],
             ensemble=self.deployment_ensemble(),
             holdout_report=self.holdout_report,
         )
@@ -1343,6 +1379,7 @@ class EvolutionEngine:
         self.run_status = "running"
         self.completed_generations = 0
         self.planned_generations = max(0, n_generations)
+        self._update_window_features()
         snapshots: List[Snapshot] = []
         ran = 0
         while not self._cancelled and not self._budget_exhausted(ran, n_generations):
@@ -1384,6 +1421,7 @@ class EvolutionEngine:
                     break
                 self.window = self.windows[wi]
                 self.window_index = wi
+                self._update_window_features()
                 if used_initial:
                     self.population = self._seed_next_window_population()
                 used_initial = True
