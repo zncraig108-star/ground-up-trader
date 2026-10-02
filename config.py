@@ -38,6 +38,8 @@ __all__ = [
     "NUM_GENES",
     "REGIME_EMA",
     "REGIME_SUPERTREND",
+    "PortfolioConfig",
+    "DEFAULT_PORTFOLIO_INSTRUMENTS",
     "default_config",
     "build_config",
 ]
@@ -100,6 +102,40 @@ class InstrumentSpec:
         """Floor a quantity down to a whole number of lots (used by dynamic sizing)."""
         lots = math.floor(qty / self.lot_size + 1e-9)
         return lots * self.lot_size
+
+DEFAULT_PORTFOLIO_INSTRUMENTS: Mapping[str, InstrumentSpec] = {
+    "BTC-PERP": InstrumentSpec("BTC-PERP", tick_size=0.1, lot_size=0.001, min_notional=10.0, maintenance_margin_rate=0.02),
+    "ETH-PERP": InstrumentSpec("ETH-PERP", tick_size=0.01, lot_size=0.01, min_notional=10.0, maintenance_margin_rate=0.025),
+    "SOL-PERP": InstrumentSpec("SOL-PERP", tick_size=0.01, lot_size=0.01, min_notional=5.0, maintenance_margin_rate=0.05),
+    "AVAX-PERP": InstrumentSpec("AVAX-PERP", tick_size=0.01, lot_size=0.05, min_notional=5.0, maintenance_margin_rate=0.05),
+    "DOGE-PERP": InstrumentSpec("DOGE-PERP", tick_size=0.00001, lot_size=10.0, min_notional=5.0, maintenance_margin_rate=0.05),
+    "LINK-PERP": InstrumentSpec("LINK-PERP", tick_size=0.001, lot_size=0.1, min_notional=5.0, maintenance_margin_rate=0.05),
+    "SUI-PERP": InstrumentSpec("SUI-PERP", tick_size=0.0001, lot_size=1.0, min_notional=5.0, maintenance_margin_rate=0.05),
+    "NEAR-PERP": InstrumentSpec("NEAR-PERP", tick_size=0.001, lot_size=0.5, min_notional=5.0, maintenance_margin_rate=0.05),
+    "XRP-PERP": InstrumentSpec("XRP-PERP", tick_size=0.0001, lot_size=5.0, min_notional=5.0, maintenance_margin_rate=0.05),
+}
+
+
+@dataclass(frozen=True)
+class PortfolioConfig:
+    """Configuration for multi-asset macro CTA trend & carry portfolio."""
+
+    universe: Tuple[str, ...] = (
+        "BTC-PERP", "ETH-PERP", "SOL-PERP", "AVAX-PERP", "DOGE-PERP",
+        "LINK-PERP", "SUI-PERP", "NEAR-PERP", "XRP-PERP"
+    )
+    signal_timeframe_hours: int = 4  # 4h macro trend signals
+    execution_timeframe_hours: int = 1  # 1h execution & stop resolution
+    trend_lookback_bars: int = 240  # 240 * 4h = 40 days entry breakout
+    exit_lookback_bars: int = 120  # 120 * 4h = 20 days exit channel
+    atr_period_bars: int = 42  # 42 * 4h = 7 days ATR
+    atr_stop_mult: float = 3.5  # 3.5x ATR trailing stop
+    target_annual_vol: float = 0.35  # 35% target portfolio volatility
+    max_portfolio_leverage: float = 2.0  # conservative multi-asset leverage cap
+    max_single_asset_leverage: float = 0.50  # max concentration per asset
+    funding_filter_z: float = 2.5  # avoid entering into >2.5 z-score adverse funding
+    allow_alt_shorts: bool = False  # Long-only on alts; shorts restricted to BTC/ETH macro hedges
+    initial_equity: float = 10_000.0
 
 
 # ---------------------------------------------------------------------------

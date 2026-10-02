@@ -253,6 +253,7 @@ async def fetch_funding_history(
     df = pd.DataFrame(records).drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
     df = df.set_index("timestamp").tz_convert("UTC").tz_localize(None)
     df.index = df.index.floor("1h")
+    df = df[~df.index.duplicated(keep="last")]
     return df
 
 
@@ -261,6 +262,7 @@ async def download_all(
     output_dir: str = "data",
     start_year: int = 2021,
     download_1m_since: Optional[datetime.datetime] = None,
+    skip_1m: bool = False,
 ) -> Tuple[str, str, str]:
     """Download full history from Coinbase up to present and save Parquet files."""
     os.makedirs(output_dir, exist_ok=True)
@@ -280,13 +282,15 @@ async def download_all(
         raise RuntimeError("Failed to fetch 1h candles from Coinbase API.")
     print(f"[ok] 1h history: {len(df_1h)} candles from {df_1h.index[0]} to {df_1h.index[-1]}")
 
-    # 2. Fetch 1m candles for recent history (default 2026 to present, or user specified)
-    if download_1m_since is None:
-        download_1m_since = datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc)
+    # 2. Fetch 1m candles for recent history (or expand 1h when skip_1m=True)
+    df_1m_real = pd.DataFrame()
+    if not skip_1m:
+        if download_1m_since is None:
+            download_1m_since = datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc)
 
-    print(f"\n[Step 2/3] Downloading real 1m candles since {download_1m_since.strftime('%Y-%m-%d')}...")
-    df_1m_real = await fetch_candles_range(product, 60, download_1m_since, now, batch_size=8)
-    print(f"[ok] Real 1m candles: {len(df_1m_real)} candles from {df_1m_real.index[0] if len(df_1m_real) > 0 else 'N/A'}")
+        print(f"\n[Step 2/3] Downloading real 1m candles since {download_1m_since.strftime('%Y-%m-%d')}...")
+        df_1m_real = await fetch_candles_range(product, 60, download_1m_since, now, batch_size=8)
+        print(f"[ok] Real 1m candles: {len(df_1m_real)} candles from {df_1m_real.index[0] if len(df_1m_real) > 0 else 'N/A'}")
 
     # 3. Combine into continuous 1m dataset
     print("\n[Step 3/3] Assembling continuous, aligned multi-year dataset...")
@@ -323,9 +327,10 @@ async def download_all(
             index=df_1h.index,
         )
 
-    path_1m = os.path.join(output_dir, "sol_1m.parquet")
-    path_1h = os.path.join(output_dir, "sol_1h.parquet")
-    path_funding = os.path.join(output_dir, "sol_funding.parquet")
+    prefix = product.split("-")[0].lower()
+    path_1m = os.path.join(output_dir, f"{prefix}_1m.parquet")
+    path_1h = os.path.join(output_dir, f"{prefix}_1h.parquet")
+    path_funding = os.path.join(output_dir, f"{prefix}_funding.parquet")
 
     df_1m.to_parquet(path_1m)
     df_1h.to_parquet(path_1h)
