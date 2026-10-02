@@ -592,13 +592,14 @@ def build_demo_config(args: argparse.Namespace):
             d_years = max(30, (end_dt - start_dt).days)
             d = args.days if (args.days is not None and args.days != 35) else d_years
             synth_start = f"{y1}-01-01T00:00:00Z"
-    oos_days = args.oos_days if args.oos_days else min(5, max(1, d // 10))
-    step_days = args.step_days if args.step_days else oos_days
-    if args.is_days:
-        is_days = args.is_days
+    if d >= 120:
+        oos_days = args.oos_days if args.oos_days else cfg.wfo.oos_days
+        step_days = args.step_days if args.step_days else cfg.wfo.step_days
+        is_days = args.is_days if args.is_days else cfg.wfo.is_days
     else:
-        # Leave room for at least ~4 OOS windows when possible.
-        is_days = min(20, max(3, d - oos_days - 3 * step_days))
+        oos_days = args.oos_days if args.oos_days else min(5, max(1, d // 10))
+        step_days = args.step_days if args.step_days else oos_days
+        is_days = args.is_days if args.is_days else min(20, max(3, d - oos_days - 3 * step_days))
     cfg = dataclasses.replace(
         cfg,
         data=dataclasses.replace(cfg.data, synth_days=d, synth_start=synth_start, train_year=str(args.year) if args.year is not None else None),
