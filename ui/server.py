@@ -567,27 +567,27 @@ async def backtest_year(year: str, request: Request, genome_id: Optional[str] = 
 # ---------------------------------------------------------------------------
 
 @app.get("/api/portfolio/summary")
-async def portfolio_summary() -> dict:
+async def portfolio_summary(mode: str = "conservative") -> dict:
     from ui.portfolio_service import PortfolioService
-    return PortfolioService.get_instance().get_summary()
+    return PortfolioService.get_instance().get_summary(mode=mode)
 
 
 @app.get("/api/portfolio/oos")
-async def portfolio_oos() -> dict:
+async def portfolio_oos(mode: str = "conservative") -> dict:
     from ui.portfolio_service import PortfolioService
-    return PortfolioService.get_instance().get_oos_report()
+    return PortfolioService.get_instance().get_oos_report(mode=mode)
 
 
 @app.get("/api/portfolio/equity")
-async def portfolio_equity(max_points: int = 600) -> dict:
+async def portfolio_equity(mode: str = "conservative", max_points: int = 600) -> dict:
     from ui.portfolio_service import PortfolioService
-    return PortfolioService.get_instance().get_equity_curve(max_points=max_points)
+    return PortfolioService.get_instance().get_equity_curve(mode=mode, max_points=max_points)
 
 
 @app.get("/api/portfolio/trades")
-async def portfolio_trades(limit: int = 150) -> List[dict]:
+async def portfolio_trades(mode: str = "conservative", limit: int = 150) -> List[dict]:
     from ui.portfolio_service import PortfolioService
-    return PortfolioService.get_instance().get_trades(limit=limit)
+    return PortfolioService.get_instance().get_trades(mode=mode, limit=limit)
 
 
 @app.websocket("/ws/evolution")

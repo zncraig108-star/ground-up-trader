@@ -112,6 +112,14 @@
           <span id="year-banner-badge" class="px-1.5 py-0.2 rounded text-[10px] font-medium bg-purple-900/60 text-purple-200 border border-purple-700/50">
             Out-of-Distribution
           </span>
+          <div id="portfolio-mode-selector" class="hidden flex items-center gap-1.5 ml-1">
+            <button id="btn-mode-cons" onclick="loadPortfolioDashboard('conservative')" class="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-600 text-white shadow-sm transition">
+              🛡️ Max DD &le; 15% Mode
+            </button>
+            <button id="btn-mode-100x" onclick="loadPortfolioDashboard('100x')" class="px-2 py-0.5 text-[10px] font-bold rounded bg-slate-800 text-slate-300 hover:bg-slate-700 transition">
+              🚀 100x Compounding Mode
+            </button>
+          </div>
           <span id="year-banner-loading" class="hidden text-amber-400 text-xs animate-pulse font-medium">Simulating…</span>
         </div>
         <div class="flex items-center gap-3 font-mono text-[11px]">
@@ -1138,6 +1146,8 @@
       viewingYear = null;
       const banner = document.getElementById("year-test-banner");
       if (banner) banner.classList.add("hidden");
+      const modeSel = document.getElementById("portfolio-mode-selector");
+      if (modeSel) modeSel.classList.add("hidden");
       
       const btnWfo = document.getElementById("btn-mode-wfo");
       if (btnWfo) {
@@ -1166,6 +1176,8 @@
       const loading = document.getElementById("year-banner-loading");
       const title = document.getElementById("year-banner-title");
       const badge = document.getElementById("year-banner-badge");
+      const modeSel = document.getElementById("portfolio-mode-selector");
+      if (modeSel) modeSel.classList.add("hidden");
       
       if (banner) banner.classList.remove("hidden");
       if (loading) loading.classList.remove("hidden");
@@ -1256,7 +1268,10 @@
       }
     }
 
-    async function loadPortfolioDashboard() {
+    let currentPortfolioMode = "conservative";
+
+    async function loadPortfolioDashboard(mode = currentPortfolioMode) {
+      currentPortfolioMode = mode;
       viewingYear = "portfolio_100x";
       const btnWfo = document.getElementById("btn-mode-wfo");
       if (btnWfo) {
@@ -1272,20 +1287,37 @@
       const loading = document.getElementById("year-banner-loading");
       const title = document.getElementById("year-banner-title");
       const badge = document.getElementById("year-banner-badge");
+      const modeSel = document.getElementById("portfolio-mode-selector");
+      const btnCons = document.getElementById("btn-mode-cons");
+      const btn100x = document.getElementById("btn-mode-100x");
       
       if (banner) banner.classList.remove("hidden");
+      if (modeSel) modeSel.classList.remove("hidden");
       if (loading) loading.classList.remove("hidden");
-      if (title) title.textContent = "100x Multi-Asset Macro CTA Portfolio (9 Assets)";
-      if (badge) {
-        badge.textContent = "99.47x Compounding · Unseen Out-of-Sample Holdout Proved";
-        badge.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-900/80 text-emerald-200 border border-emerald-500 shadow-sm";
+
+      if (mode === "conservative") {
+        if (title) title.textContent = "Multi-Asset Macro CTA Portfolio (Max DD <= 15% Mode)";
+        if (badge) {
+          badge.textContent = "Max DD: 14.62% <= 15% · OOS Holdout Verified (13.98% DD)";
+          badge.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-900/80 text-emerald-200 border border-emerald-500 shadow-sm";
+        }
+        if (btnCons) btnCons.className = "px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-600 text-white shadow-sm transition";
+        if (btn100x) btn100x.className = "px-2 py-0.5 text-[10px] font-bold rounded bg-slate-800 text-slate-300 hover:bg-slate-700 transition";
+      } else {
+        if (title) title.textContent = "Multi-Asset Macro CTA Portfolio (100x Compounding Mode)";
+        if (badge) {
+          badge.textContent = "99.47x Compounding ($10k → $994.7k) · 9.35x OOS Holdout Verified";
+          badge.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-purple-900/80 text-purple-200 border border-purple-500 shadow-sm";
+        }
+        if (btnCons) btnCons.className = "px-2 py-0.5 text-[10px] font-bold rounded bg-slate-800 text-slate-300 hover:bg-slate-700 transition";
+        if (btn100x) btn100x.className = "px-2 py-0.5 text-[10px] font-bold rounded bg-purple-600 text-white shadow-sm transition";
       }
 
       try {
         const [summaryRes, oosRes, eqRes] = await Promise.all([
-          fetch("/api/portfolio/summary").then(r => r.json()),
-          fetch("/api/portfolio/oos").then(r => r.json()),
-          fetch("/api/portfolio/equity?max_points=600").then(r => r.json())
+          fetch(`/api/portfolio/summary?mode=${mode}`).then(r => r.json()),
+          fetch(`/api/portfolio/oos?mode=${mode}`).then(r => r.json()),
+          fetch(`/api/portfolio/equity?mode=${mode}&max_points=600`).then(r => r.json())
         ]);
 
         document.getElementById("year-stat-return").textContent = `+${(summaryRes.total_return * 100).toFixed(0)}% (${summaryRes.multiplier.toFixed(1)}x)`;
@@ -1300,7 +1332,10 @@
         const solPts = pts.map(p => ({ x: new Date(p.time).getTime(), y: p.sol }));
         const btcPts = pts.map(p => ({ x: new Date(p.time).getTime(), y: p.btc }));
 
-        totalChart.data.datasets[0].label = "100x Macro Portfolio ($10k → $994.7k)";
+        const labelStrat = mode === "conservative" 
+          ? `Macro Portfolio (+${(summaryRes.total_return * 100).toFixed(0)}% · 14.6% DD)`
+          : `100x Macro Portfolio ($10k → $994.7k · 90.4% DD)`;
+        totalChart.data.datasets[0].label = labelStrat;
         totalChart.data.datasets[0].data = stratPts;
         totalChart.data.datasets[1].label = "SOL Buy & Hold ($10k → $33.3k)";
         totalChart.data.datasets[1].data = solPts;
@@ -1330,7 +1365,7 @@
         const oos = oosRes.out_of_sample || {};
         const ins = oosRes.in_sample || {};
         document.getElementById("agg-note").textContent = 
-          `9 Assets · 5.25 Years Continuous · Out-of-Sample Test: ${oos.multiplier?.toFixed(1) || 9.3}x (Sharpe ${oos.sharpe?.toFixed(2) || 1.33}) · In-Sample: ${ins.multiplier?.toFixed(1) || 10.4}x (Sharpe ${ins.sharpe?.toFixed(2) || 1.37})`;
+          `9 Assets · 5.25 Years Continuous · Out-of-Sample Test (2024–2026): ${oos.multiplier?.toFixed(1) || 1.3}x (Sharpe ${oos.sharpe?.toFixed(2) || 0.81}, DD ${(oos.max_drawdown * 100)?.toFixed(1) || 14.0}%) · In-Sample: ${ins.multiplier?.toFixed(1) || 1.4}x (Sharpe ${ins.sharpe?.toFixed(2) || 0.94})`;
         totalChart.update('none');
       } catch (err) {
         console.error("Portfolio dashboard load failed:", err);
