@@ -270,3 +270,12 @@ Real 1m ETH/SOL/BTC -> 15m bars, whole contracts (MET/SOL/BTI), $500 start, floo
 Cost decomposition (B / E full, IS then OOS): zero cost 1.37x/0.96x and 0.97x/1.09x; maker 2bp, no slip 0.98x/0.92x and 1.32x/0.99x.
 
 **Verdict: REJECTED. Goal (>=10x OOS) NOT met.** Frequency was raised 5x (>=40/yr) but there is no gross edge OOS (win ~43-48% at ~1:1 payoff before costs), so more trades only add fee drag. Honest ceiling for these 15m signals is ~0.9-1.1x. Ladder sizing cannot create edge; it only scales it, including negative edge. Some variants end MTM a few dollars under the $450 floor from fee/gap overshoot (minEq 437-446). Prior 1h engine (1.31x OOS) remains the best honest result. Next: real edge sources (funding/basis, cross-venue, event data) not testable with OHLCV alone.
+
+
+## H-011: Data-integrity audit + walk-forward search on REAL 15m candles (search_wf.py, fetch_cb.py)
+
+**Finding 1 (critical): `data/*_1m.parquet` is NOT real 1m data.** It is linearly interpolated from hourly bars (~90% of 1m diffs identical to the prior diff, ~2 unique volumes/hour). Every sub-hour bar embeds the future hour close = lookahead, and 1m-derived highs/lows miss real wicks. A first search on it "passed" at 3e18x (mean-reversion on 15m); that result is an artifact and is void. All 1m-derived results (including H-010 above) are void. `data/*_1h.parquet` has real wicks. Real Coinbase spot 15m candles now in `data/{eth,sol,btc}_15m.parquet` (fetch_cb.py; gitignored data).
+
+**Finding 2: no edge found on real data.** Harness: 5 families (Donchian, EMA, mean-reversion, momentum, squeeze) x 4 timeframes (15m-4h) x sizing/exit params, quarterly walk-forward from 2024-01 (train strictly before window, equity+floor chained), integer contracts, floors 450/500/1000/2000, taker 5bp+2bp slip/side. 15k random configs over 4 seeds. Stitched OOS: 0.88x, 0.91x, 0.89x, 0.89x. Not met (need >=10x). A `SUSPECT` guard now rejects >1000x as a bug.
+
+Goal remains OPEN. Untried: funding/basis and futures-specific data, maker-fill modelling, order-book flow, non-price data.
