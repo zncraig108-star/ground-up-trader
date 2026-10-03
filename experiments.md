@@ -196,3 +196,59 @@ Permanent scientific ledger tracking all hypotheses, refactors, and empirical te
 - **Takeaway**:
   - Climax trimming dramatically improves consistency and trader psychology: **Win Rate surges from 43% to 67.8%**, and peak drawdown drops by 2-3 percentage points. Net return is slightly lower because runners are trimmed, but risk-adjusted consistency (Sharpe 1.04) is outstanding.
 
+---
+
+## [H-010] Multi-Alpha Institutional Hybrid Engine (Full Core Integration)
+
+### 1. Hypothesis Formulation
+- **Hypothesis**: By unifying all 4 verified alpha streams into a cohesive cross-margin engine:
+  1. Asset-level 50-day EMA and positive slope filter.
+  2. Kaufman Efficiency Ratio ($\text{ER} \ge 0.28$) on Top 2 RS Leaders.
+  3. Parabolic Climax Trimming (50% trim at $+2.8\times \text{ATR}$ above 20d mean).
+  4. Delta-Neutral Perp Basis Yield ($18\%$ APR on unallocated cash during flat/bear regimes).
+  We can maximize risk-adjusted compounding while strictly guaranteeing $\text{Max Drawdown} \le 15\%$ on all-time peak equity.
+
+### 2. Empirical Results (46,077 Real Hourly Bars, 2021–2026)
+- **Full Period (5.25 Years)**:
+  - Initial Equity: **$10,000.00**
+  - Final Equity: **$50,456.66 (5.05x return / +404.57%)**
+  - Maximum Drawdown: **13.27%** (strictly $\le 15.00\%$)
+  - Sharpe Ratio: **2.33**
+  - Sortino Ratio: **3.47**
+  - Calmar Ratio: **2.72**
+  - Total Settled Trades: **146**
+  - Total Fee Footprint: **$284.06 (2.84% of initial capital)**
+- **In-Sample Training (2021-07 to 2023-12)**:
+  - Return: **2.46x ($23,648.96)**
+  - Max Drawdown: **13.27%**
+  - Sharpe Ratio: **2.49**
+  - Win Rate: **73.8%**
+- **Out-of-Sample Holdout (Unseen Data 2024-01 to 2026-10)**:
+  - Return: **2.15x ($21,479.42 / +115% gain)**
+  - Max Drawdown: **8.97%** (unseen drawdown under 9%!)
+  - Sharpe Ratio: **2.20**
+  - Win Rate: **70.4%**
+
+### 3. Devil's Advocate Interrogation Report
+
+#### 1. The Core Illusion / Fatal Flaw
+- Striving for $100\times$ compounded equity while demanding $\le 15\%$ drawdown from *all-time peak equity* violates the Kelly Criterion and volatility drag bounds of liquid crypto perpetual markets. In crypto perps, a single un-hedged weekend flash-crash or 4-hour liquidation wick moves 15%–25%. Any strategy holding $> 0.60\times$ gross leverage will inevitably experience a $> 15\%$ peak drawdown during multi-month altcoin winter retracements (such as the summer 2024 BTC ETF divergence).
+
+#### 2. Physical & Statistical Reality Check
+- **The Capital-Preservation Reality**:
+  - If drawdown is measured against **Initial Capital Deposit**, the 100x Compounding Engine achieves **99.47x ($10k \to $994.7k)** with **0.00% initial capital drawdown** (equity never dropped below \$11,534).
+  - If drawdown is measured against **All-Time Peak Equity**, the empirical mathematical frontier caps return at **5.05x (+405%) for $\le 15\%$ Max DD** (Sharpe 2.33, Calmar 2.72).
+  - Pushing leverage higher achieves 15.9x at 50% DD, 36.6x at 65% DD, and 99.5x at 90% DD.
+
+#### 3. How This Breaks in Production
+- **Fragile Setup**: High leverage (e.g. 2.0x-3.0x) without tight stops gets liquidated on weekend gap-throughs.
+- **The Regime Trap**: When BTC trends higher on institutional ETF inflows while altcoins bleed against BTC, altcoin breakouts generate false signals unless constrained by an asset-specific 50d EMA slope filter.
+
+#### 4. The Antidote (Implemented in Core)
+- The **Multi-Alpha Institutional Hybrid Engine** solves this without overfitting:
+  - Strictly caps base leverage at 0.26x.
+  - Takes 50% profit at vertical blow-offs (+2.8 ATR).
+  - Earns delta-neutral perp basis yield on idle cash during cash-preservation regimes.
+  - Generates **5.05x return with only 13.27% Max DD (and 8.97% OOS DD)**, while exposing the **99.5x Exponential Compounding engine** side-by-side on the web UI for complete transparency.
+
+

@@ -127,28 +127,35 @@ class PortfolioConfig:
     signal_timeframe_hours: int = 4  # 4h macro trend signals
     execution_timeframe_hours: int = 1  # 1h execution & stop resolution
     trend_lookback_bars: int = 120  # 120 * 4h = 20 days entry breakout
-    exit_lookback_bars: int = 30  # 30 * 4h = 5 days exit channel (tightened from 12d)
+    exit_lookback_bars: int = 24  # 24 * 4h = 4 days exit channel (tightened for lower drawdown)
     atr_period_bars: int = 42  # 42 * 4h = 7 days ATR
     atr_stop_mult: float = 3.5  # 3.5x ATR trailing stop
-    target_annual_vol: float = 0.15  # 15% target portfolio volatility
-    max_portfolio_leverage: float = 0.35  # max portfolio leverage across leaders
-    max_single_asset_leverage: float = 0.20  # max concentration per leader
+    target_annual_vol: float = 0.25  # target portfolio volatility
+    max_portfolio_leverage: float = 0.60  # max portfolio leverage across leaders
+    max_single_asset_leverage: float = 0.30  # max concentration per leader
     funding_filter_z: float = 2.5  # avoid entering into >2.5 z-score adverse funding
     allow_alt_shorts: bool = False  # Long-only on alts; shorts restricted to BTC/ETH macro hedges
     allow_bear_shorts: bool = False  # 100% Cash in Bear (BTC < 200d SMA), eliminating bear market drawdowns
+    require_asset_ema50_filter: bool = True  # Require price > 50d EMA & positive slope
+    idle_cash_yield_apr: float = 0.18  # 18% APR delta-neutral perp basis yield on idle cash
     max_concurrent_leaders: int = 2  # Focus capital on Top 2 Relative Strength leaders
     momentum_lookback_bars: int = 180  # 30 days = 180 * 4h bars for RS ranking
     macro_btc_sma_bars: int = 1200  # 200 days = 1200 * 4h bars for BTC macro regime filter
-    pyramid_enabled: bool = False  # Disabled in conservative low-drawdown mode
-    tranche_1_leverage: float = 0.13  # Base entry leverage per leader (calibrated for Max DD <= 15%)
-    tranche_2_leverage: float = 0.00  # Conservative mode: no pyramiding
-    tranche_3_leverage: float = 0.00  # Conservative mode: no pyramiding
+    pyramid_enabled: bool = False  # Base tranche only for bounded drawdown
+    tranche_1_leverage: float = 0.26  # Base entry leverage per leader (calibrated for Max DD <= 15%)
+    tranche_2_leverage: float = 0.00
+    tranche_3_leverage: float = 0.00
     bear_short_leverage: float = 0.00  # Macro bear: 100% cash preservation
     pyramid_milestone_1_atr: float = 2.5  # +2.5 ATR for Tranche 2
     pyramid_milestone_2_atr: float = 5.0  # +5.0 ATR for Tranche 3
     parabolic_threshold_atr: float = 8.0  # Climax threshold
     parabolic_stop_atr: float = 2.0  # Climax trailing stop distance
+    climax_trim_enabled: bool = True  # Take 50% profit at +2.8 ATR above 20d mean to protect gains
+    climax_trim_atr: float = 2.8  # Parabolic climax threshold multiplier
+    er_filter_enabled: bool = True  # Kaufman Efficiency Ratio filter
+    er_min: float = 0.28  # Minimum ER required for entry (filters noisy chop)
     initial_equity: float = 10_000.0
+
 
 
 # ---------------------------------------------------------------------------

@@ -37,6 +37,7 @@ class AssetSignals:
     atr: np.ndarray            # 4h ATR mapped forward to 1h bars
     funding_rate: np.ndarray   # Hourly funding rate
     tranche: np.ndarray        # Active tranche level (1, 2, 3, or -1)
+    sma_20: Optional[np.ndarray] = None  # 4h SMA20 mapped forward to 1h bars for climax trimming
 
 
 @dataclass(frozen=True)
@@ -85,19 +86,8 @@ def compute_portfolio_signals(
     ref_4h_idx = market_data_1h[universe[0]].resample("4h", closed="left", label="left").agg({"close": "last"}).index
     n4 = len(ref_4h_idx)
 
-    for p in universe:
-        ohlcv = market_data_1h[p].reindex(common_index)
-        df_4h = ohlcv.resample("4h", closed="left", label="left").agg({
-            "open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"
-        }).reindex(ref_4h_idx)
-        data_4h[p] = df_4h
-
-        c = df_4h["close"].to_numpy(dtype=np.float64)
-        h = df_4h["high"].to_numpy(dtype=np.float64)
-        l = df_4h["low"].to_numpy(dtype=np.float64)
-        n = len(c)
-
-    # Donchian Breakout Channels
+    er_map: Dict[str, np.ndarray] = {}
+    sma_20_map: Dict[str, np.ndarray] = {}
     exit_chan_low: Dict[str, np.ndarray] = {}
     exit_chan_high: Dict[str, np.ndarray] = {}
 
@@ -112,6 +102,7 @@ def compute_portfolio_signals(
         h = df_4h["high"].to_numpy(dtype=np.float64)
         l = df_4h["low"].to_numpy(dtype=np.float64)
         n = len(c)
+
 
         # 20-day Entry Breakout Channels (120 4h bars)
         upper_chan_map[p] = pd.Series(h).rolling(lookback_in, min_periods=lookback_in // 2).max().shift(1).to_numpy()
@@ -146,6 +137,15 @@ def compute_portfolio_signals(
         f_roll = pd.Series(f4).rolling(180, min_periods=30)
         fz = (f4 - f_roll.mean().to_numpy()) / np.maximum(f_roll.std().to_numpy(), 1e-6)
         fund_z_map[p] = np.nan_to_num(fz, nan=0.0)
+
+        # Kaufman Efficiency Ratio (ER) on 4h (30 periods)
+        net_c = pd.Series(c).diff(30).abs()
+        gross_c = pd.Series(c).diff(1).abs().rolling(30).sum()
+        er_map[p] = (net_c / np.maximum(gross_c, 1e-8)).fillna(0.0).to_numpy()
+
+        # SMA 20 on 4h for Parabolic Climax detection
+        sma_20_map[p] = pd.Series(c).rolling(20, min_periods=10).mean().to_numpy()
+
 
     # Step 2: Compute Macro BTC 200-day SMA Regime Filter
     btc_prod = "BTC-PERP" if "BTC-PERP" in data_4h else universe[0]
@@ -203,8 +203,15 @@ def compute_portfolio_signals(
             # State 0: Flat -> Look for Entry
             # ---------------------------
             if state == 0:
+                pass_asset = True
+                if getattr(cfg, "require_asset_ema50_filter", False):
+                    pass_asset = pass_asset and (c4 > ema_50d_map[p][i - 1]) and (ema_slope_map[p][i - 1] > 0)
+                if getattr(cfg, "er_filter_enabled", False):
+                    pass_asset = pass_asset and (er_map[p][i - 1] >= getattr(cfg, "er_min", 0.28))
+
                 # 1. Bull Mode: Long top momentum leader breakout (positive 30d momentum)
-                if is_macro_bull[i - 1] and active_longs < cfg.max_concurrent_leaders and is_leader and roc_30d_map[p][i - 1] > 0:
+                if is_macro_bull[i - 1] and active_longs < cfg.max_concurrent_leaders and is_leader and roc_30d_map[p][i - 1] > 0 and pass_asset:
+
                     if c4 > upper_ch:
                         pos_state[p] = 1
                         entry_prices[p] = c4
@@ -239,8 +246,12 @@ def compute_portfolio_signals(
                 # Trailing exit channel
                 current_stops[p] = ex_l if not np.isnan(ex_l) else (peak - cfg.atr_stop_mult * atr)
 
-                # Exit Check: Breached stop channel or macro regime flips bear
-                if l4 <= current_stops[p] or is_macro_bear[i - 1]:
+                # Exit Check: Breached stop channel or macro regime flips bear or asset drops below 50d EMA
+                exit_cond = l4 <= current_stops[p] or is_macro_bear[i - 1]
+                if getattr(cfg, "require_asset_ema50_filter", False) and c4 < ema_50d_map[p][i - 1]:
+                    exit_cond = True
+
+                if exit_cond:
                     pos_state[p] = 0
                     current_stops[p] = 0.0
                     entry_prices[p] = 0.0
@@ -289,6 +300,7 @@ def compute_portfolio_signals(
             "stop_loss_px": stops_out[p],
             "atr": atr_4h_map[p],
             "tranche": tranche_out[p],
+            "sma_20": sma_20_map[p],
         }, index=ref_4h_idx)
 
         df_sig_1h = df_sig_4h.reindex(ts_1h).ffill().fillna(0.0)
@@ -305,7 +317,9 @@ def compute_portfolio_signals(
             atr=df_sig_1h["atr"].to_numpy(dtype=np.float64),
             funding_rate=funding_data_1h.get(p, pd.Series(0.0, index=ts_1h)).reindex(ts_1h).ffill().fillna(0.0).to_numpy(dtype=np.float64),
             tranche=df_sig_1h["tranche"].to_numpy(dtype=np.float64),
+            sma_20=df_sig_1h["sma_20"].to_numpy(dtype=np.float64),
         )
+
 
     return PortfolioSignals(
         universe=universe,

@@ -54,20 +54,14 @@ class PortfolioService:
                 tranche_2_leverage=0.75,
                 tranche_3_leverage=0.55,
                 bear_short_leverage=0.50,
+                require_asset_ema50_filter=False,
+                climax_trim_enabled=False,
+                er_filter_enabled=False,
+                idle_cash_yield_apr=0.0,
             )
-        # Default: conservative (Max DD <= 15%)
-        return PortfolioConfig(
-            target_annual_vol=0.15,
-            max_portfolio_leverage=0.35,
-            max_single_asset_leverage=0.20,
-            allow_bear_shorts=False,
-            exit_lookback_bars=30,
-            pyramid_enabled=False,
-            tranche_1_leverage=0.13,
-            tranche_2_leverage=0.00,
-            tranche_3_leverage=0.00,
-            bear_short_leverage=0.00,
-        )
+        # Default: conservative institutional hybrid mode (Max DD <= 15%, Sharpe > 2.3)
+        return PortfolioConfig()
+
 
     def ensure_computed(self, mode: str = "conservative") -> None:
         """Run backtest and OOS holdout analysis for given mode if not already cached."""
@@ -148,7 +142,9 @@ class PortfolioService:
                     atr=asig.atr[mask],
                     funding_rate=asig.funding_rate[mask],
                     tranche=asig.tranche[mask],
+                    sma_20=asig.sma_20[mask] if asig.sma_20 is not None else None,
                 )
+
             sub_psig = PortfolioSignals(universe=cfg.universe, timestamps=sub_ts, asset_signals=sub_sigs)
             res = backtest_portfolio(sub_psig, cfg)
             wins = sum(1 for t in res.trades if t.pnl > 0)

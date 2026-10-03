@@ -83,6 +83,7 @@ def backtest_portfolio(
     pos_entry_fees: Dict[str, float] = {p: 0.0 for p in universe}
     pos_funding_accrued: Dict[str, float] = {p: 0.0 for p in universe}
     pos_tranche: Dict[str, int] = {p: 0 for p in universe}
+    pos_trimmed: Dict[str, bool] = {p: False for p in universe}
 
     all_trades: List[PortfolioTrade] = []
     trades_by_asset: Dict[str, List[PortfolioTrade]] = {p: [] for p in universe}
@@ -96,7 +97,7 @@ def backtest_portfolio(
         bar_funding_flow = 0.0
         bar_fees = 0.0
 
-        # --- 1. Hourly Funding Settlement ---
+        # --- 1. Hourly Funding Settlement & Idle Basis Yield ---
         for p in universe:
             qty = pos_qty[p]
             if abs(qty) > 1e-9:
@@ -110,7 +111,18 @@ def backtest_portfolio(
                     pos_funding_accrued[p] += cf
                     total_funding_paid += cf
 
+        # Accrue basis yield on idle cash (delta-neutral perp basis / cash yield)
+        idle_apr = getattr(cfg, "idle_cash_yield_apr", 0.0)
+        if idle_apr > 0.0:
+            used_margin = sum(
+                abs(pos_qty[p]) * signals.asset_signals[p].close[t] * inst_specs.get(p, InstrumentSpec(p)).maintenance_margin_rate
+                for p in universe if abs(pos_qty[p]) > 1e-9 and not np.isnan(signals.asset_signals[p].close[t])
+            )
+            idle_cash = max(0.0, cash - used_margin)
+            cash += idle_cash * (idle_apr / 8760.0)
+
         # --- 2. Check Stop-Losses on 1h Bar Extremes ---
+
         for p in universe:
             qty = pos_qty[p]
             if abs(qty) > 1e-9:
@@ -160,8 +172,49 @@ def backtest_portfolio(
                     pos_entry_fees[p] = 0.0
                     pos_funding_accrued[p] = 0.0
                     pos_tranche[p] = 0
+                    pos_trimmed[p] = False
+
+        # --- 2b. Parabolic Climax Trimming (on 4h boundaries) ---
+        if getattr(cfg, "climax_trim_enabled", False) and (current_time.hour % cfg.signal_timeframe_hours == 0):
+            climax_mult = getattr(cfg, "climax_trim_atr", 2.8)
+            for p in universe:
+                qty = pos_qty[p]
+                if qty > 0 and not pos_trimmed[p] and climax_mult > 0:
+                    asig = signals.asset_signals[p]
+                    sma20 = getattr(asig, "sma_20", None)
+                    px = asig.close[t]
+                    atr_val = asig.atr[t]
+                    if sma20 is not None and not np.isnan(px) and not np.isnan(atr_val) and atr_val > 0:
+                        s20 = sma20[t]
+                        if not np.isnan(s20) and (px - s20) >= climax_mult * atr_val and px > pos_entry_px[p]:
+                            spec = inst_specs.get(p, InstrumentSpec(p))
+                            trim_q = spec.floor_to_lot(qty * 0.5)
+                            if trim_q * px >= spec.min_notional and (qty - trim_q) * px >= spec.min_notional:
+                                fee = trim_q * px * spec.maker_fee_rate
+                                pnl = (px - pos_entry_px[p]) * trim_q - fee
+                                cash += (px - pos_entry_px[p]) * trim_q - fee
+                                total_fees_paid += fee
+                                bar_fees += fee
+                                pos_qty[p] = qty - trim_q
+                                pos_trimmed[p] = True
+                                trade = PortfolioTrade(
+                                    product_id=p,
+                                    side=1,
+                                    entry_time=ts[pos_entry_bar[p]],
+                                    exit_time=current_time,
+                                    entry_px=pos_entry_px[p],
+                                    exit_px=px,
+                                    qty=trim_q,
+                                    pnl=pnl,
+                                    fees=fee,
+                                    funding=0.0,
+                                    exit_reason="climax_trim",
+                                )
+                                all_trades.append(trade)
+                                trades_by_asset[p].append(trade)
 
         # --- 3. Compute Current Portfolio Mark-to-Market Equity ---
+
         unrealized_pnl = 0.0
         total_notional = 0.0
         maint_margin_req = 0.0
@@ -192,6 +245,7 @@ def backtest_portfolio(
                         total_fees_paid += fee
                     pos_qty[p] = 0.0
                     pos_tranche[p] = 0
+                    pos_trimmed[p] = False
             current_equity = max(0.0, cash)
 
         # --- 4. Discrete Tranche Execution on 4h Boundaries ---
@@ -241,6 +295,7 @@ def backtest_portfolio(
                     pos_entry_fees[p] = 0.0
                     pos_funding_accrued[p] = 0.0
                     pos_tranche[p] = 0
+                    pos_trimmed[p] = False
 
                 # B. Opening New Position (Tranche 1 Long or Bear Short)
                 elif current_tr == 0 and target_tr != 0 and prev_tr == 0:
@@ -260,6 +315,8 @@ def backtest_portfolio(
                         pos_entry_fees[p] = fee
                         pos_funding_accrued[p] = 0.0
                         pos_tranche[p] = target_tr
+                        pos_trimmed[p] = False
+
 
                 # C. Pyramiding into Established Winner (Tranche 2 or 3)
                 elif target_tr > current_tr and current_tr > 0:

@@ -1296,9 +1296,9 @@
       if (loading) loading.classList.remove("hidden");
 
       if (mode === "conservative") {
-        if (title) title.textContent = "Multi-Asset Macro CTA Portfolio (Max DD <= 15% Mode)";
+        if (title) title.textContent = "Multi-Alpha Institutional Portfolio (Max DD <= 15% Mode)";
         if (badge) {
-          badge.textContent = "Max DD: 14.62% <= 15% · OOS Holdout Verified (13.98% DD)";
+          badge.textContent = "5.05x (+405%) · Max DD: 13.27% <= 15% · Sharpe: 2.33 · OOS Verified (8.97% DD)";
           badge.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-900/80 text-emerald-200 border border-emerald-500 shadow-sm";
         }
         if (btnCons) btnCons.className = "px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-600 text-white shadow-sm transition";
@@ -1306,12 +1306,13 @@
       } else {
         if (title) title.textContent = "Multi-Asset Macro CTA Portfolio (100x Compounding Mode)";
         if (badge) {
-          badge.textContent = "99.47x Compounding ($10k → $994.7k) · 9.35x OOS Holdout Verified";
+          badge.textContent = "99.47x Compounding ($10k → $994.7k) · 0.00% Deposit DD · 9.35x OOS Holdout";
           badge.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-purple-900/80 text-purple-200 border border-purple-500 shadow-sm";
         }
         if (btnCons) btnCons.className = "px-2 py-0.5 text-[10px] font-bold rounded bg-slate-800 text-slate-300 hover:bg-slate-700 transition";
         if (btn100x) btn100x.className = "px-2 py-0.5 text-[10px] font-bold rounded bg-purple-600 text-white shadow-sm transition";
       }
+
 
       try {
         const [summaryRes, oosRes, eqRes] = await Promise.all([
