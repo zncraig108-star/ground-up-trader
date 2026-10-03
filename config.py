@@ -126,15 +126,28 @@ class PortfolioConfig:
     )
     signal_timeframe_hours: int = 4  # 4h macro trend signals
     execution_timeframe_hours: int = 1  # 1h execution & stop resolution
-    trend_lookback_bars: int = 240  # 240 * 4h = 40 days entry breakout
-    exit_lookback_bars: int = 120  # 120 * 4h = 20 days exit channel
+    trend_lookback_bars: int = 120  # 120 * 4h = 20 days entry breakout
+    exit_lookback_bars: int = 72  # 72 * 4h = 12 days exit channel
     atr_period_bars: int = 42  # 42 * 4h = 7 days ATR
     atr_stop_mult: float = 3.5  # 3.5x ATR trailing stop
     target_annual_vol: float = 0.35  # 35% target portfolio volatility
-    max_portfolio_leverage: float = 2.0  # conservative multi-asset leverage cap
-    max_single_asset_leverage: float = 0.50  # max concentration per asset
+    max_portfolio_leverage: float = 3.5  # max portfolio leverage across leaders
+    max_single_asset_leverage: float = 2.30  # max concentration per leader
     funding_filter_z: float = 2.5  # avoid entering into >2.5 z-score adverse funding
     allow_alt_shorts: bool = False  # Long-only on alts; shorts restricted to BTC/ETH macro hedges
+    allow_bear_shorts: bool = True  # Enable BTC/ETH shorting when BTC < 200d SMA
+    max_concurrent_leaders: int = 2  # Focus 100% of capital on Top 2 Relative Strength leaders
+    momentum_lookback_bars: int = 180  # 30 days = 180 * 4h bars for RS ranking
+    macro_btc_sma_bars: int = 1200  # 200 days = 1200 * 4h bars for BTC macro regime filter
+    pyramid_enabled: bool = True  # Pyramiding onto winning trades using house money
+    tranche_1_leverage: float = 1.00  # Base entry leverage per leader
+    tranche_2_leverage: float = 0.75  # Added at +2.5 ATR profit
+    tranche_3_leverage: float = 0.55  # Added at +5.0 ATR profit
+    bear_short_leverage: float = 0.50  # Macro bear short leverage (BTC/ETH only)
+    pyramid_milestone_1_atr: float = 2.5  # +2.5 ATR for Tranche 2
+    pyramid_milestone_2_atr: float = 5.0  # +5.0 ATR for Tranche 3
+    parabolic_threshold_atr: float = 8.0  # Climax threshold
+    parabolic_stop_atr: float = 2.0  # Climax trailing stop distance
     initial_equity: float = 10_000.0
 
 

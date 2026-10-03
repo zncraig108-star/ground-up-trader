@@ -82,6 +82,7 @@ def backtest_portfolio(
     pos_entry_bar: Dict[str, int] = {p: -1 for p in universe}
     pos_entry_fees: Dict[str, float] = {p: 0.0 for p in universe}
     pos_funding_accrued: Dict[str, float] = {p: 0.0 for p in universe}
+    pos_tranche: Dict[str, int] = {p: 0 for p in universe}
 
     all_trades: List[PortfolioTrade] = []
     trades_by_asset: Dict[str, List[PortfolioTrade]] = {p: [] for p in universe}
@@ -102,12 +103,12 @@ def backtest_portfolio(
                 asig = signals.asset_signals[p]
                 rate = asig.funding_rate[t]
                 px = asig.close[t]
-                # Positive rate: Long pays short. Long flow = -qty * px * rate
-                cf = -qty * px * rate
-                cash += cf
-                bar_funding_flow += cf
-                pos_funding_accrued[p] += cf
-                total_funding_paid += cf
+                if not np.isnan(px) and px > 0:
+                    cf = -qty * px * rate
+                    cash += cf
+                    bar_funding_flow += cf
+                    pos_funding_accrued[p] += cf
+                    total_funding_paid += cf
 
         # --- 2. Check Stop-Losses on 1h Bar Extremes ---
         for p in universe:
@@ -123,15 +124,13 @@ def backtest_portfolio(
                 exit_price = 0.0
 
                 if qty > 0 and sl_px > 0 and asig.low[t] <= sl_px:
-                    # Long stop hit: fills at stop price minus slippage (or open if gapped)
                     exit_price = min(asig.close[t], sl_px) - tick
                     hit_stop = True
                 elif qty < 0 and sl_px > 0 and asig.high[t] >= sl_px:
-                    # Short stop hit: fills at stop price plus slippage (or open if gapped)
                     exit_price = max(asig.close[t], sl_px) + tick
                     hit_stop = True
 
-                if hit_stop:
+                if hit_stop and exit_price > 0:
                     notional = abs(qty) * exit_price
                     exit_fee = notional * taker_rate
                     pnl = (exit_price - pos_entry_px[p]) * qty - (pos_entry_fees[p] + exit_fee)
@@ -160,6 +159,7 @@ def backtest_portfolio(
                     pos_entry_bar[p] = -1
                     pos_entry_fees[p] = 0.0
                     pos_funding_accrued[p] = 0.0
+                    pos_tranche[p] = 0
 
         # --- 3. Compute Current Portfolio Mark-to-Market Equity ---
         unrealized_pnl = 0.0
@@ -170,106 +170,117 @@ def backtest_portfolio(
             qty = pos_qty[p]
             if abs(qty) > 1e-9:
                 px = signals.asset_signals[p].close[t]
-                unrealized_pnl += (px - pos_entry_px[p]) * qty
-                notional = abs(qty) * px
-                total_notional += notional
-                spec = inst_specs.get(p, InstrumentSpec(p))
-                maint_margin_req += notional * spec.maintenance_margin_rate
+                if not np.isnan(px) and px > 0:
+                    unrealized_pnl += (px - pos_entry_px[p]) * qty
+                    notional = abs(qty) * px
+                    total_notional += notional
+                    spec = inst_specs.get(p, InstrumentSpec(p))
+                    maint_margin_req += notional * spec.maintenance_margin_rate
 
         current_equity = cash + unrealized_pnl
 
         # Intrabar Liquidation Check
         if current_equity < maint_margin_req and not is_liquidated:
             is_liquidated = True
-            # Liquidate all open positions at market
             for p in universe:
                 if abs(pos_qty[p]) > 1e-9:
                     px = signals.asset_signals[p].close[t]
-                    spec = inst_specs.get(p, InstrumentSpec(p))
-                    fee = abs(pos_qty[p]) * px * spec.taker_fee_rate
-                    cash -= fee
-                    total_fees_paid += fee
+                    if not np.isnan(px) and px > 0:
+                        spec = inst_specs.get(p, InstrumentSpec(p))
+                        fee = abs(pos_qty[p]) * px * spec.taker_fee_rate
+                        cash -= fee
+                        total_fees_paid += fee
                     pos_qty[p] = 0.0
+                    pos_tranche[p] = 0
             current_equity = max(0.0, cash)
 
-        # --- 4. Rebalance on 4h Boundaries ---
-        # Align rebalancing to every 4 hours (e.g. 00:00, 04:00, 08:00, 12:00, 16:00, 20:00)
+        # --- 4. Discrete Tranche Execution on 4h Boundaries ---
         is_rebal_hour = (current_time.hour % cfg.signal_timeframe_hours == 0) and not is_liquidated
 
         if is_rebal_hour and current_equity > 100.0:
             for p in universe:
                 asig = signals.asset_signals[p]
                 spec = inst_specs.get(p, InstrumentSpec(p))
-                target_w = asig.target_weight[t]  # signed target weight
-                target_dollar_notional = current_equity * target_w
+                target_tr = int(asig.tranche[t])
+                prev_tr = int(asig.tranche[t - 1]) if t > 0 else 0
+                current_tr = pos_tranche[p]
                 current_px = asig.close[t]
 
-                # Desired target quantity (signed)
-                desired_qty = spec.floor_to_lot(abs(target_dollar_notional) / max(current_px, 1e-6))
-                if target_w < 0:
-                    desired_qty = -desired_qty
+                if np.isnan(current_px) or current_px <= 0:
+                    continue
 
-                current_q = pos_qty[p]
-                is_regime_flip = (current_q > 0 and desired_qty <= 0) or (current_q < 0 and desired_qty >= 0) or (current_q == 0 and desired_qty != 0)
-                # Only rebalance if regime changes or size drifted by >= 25% to prevent micro-churn
-                size_drift = abs(desired_qty - current_q) / max(abs(current_q), 1e-6)
-                needs_rebalance = is_regime_flip or (size_drift >= 0.25)
+                # A. Position Closure (target_tr == 0 while we have an open position)
+                if target_tr == 0 and current_tr != 0 and abs(pos_qty[p]) > 1e-9:
+                    q = abs(pos_qty[p])
+                    side = 1 if pos_qty[p] > 0 else -1
+                    exit_fee = q * current_px * spec.maker_fee_rate
+                    pnl = (current_px - pos_entry_px[p]) * pos_qty[p] - (pos_entry_fees[p] + exit_fee)
+                    cash += (current_px - pos_entry_px[p]) * pos_qty[p] - exit_fee
+                    total_fees_paid += exit_fee
+                    bar_fees += exit_fee
 
-                if needs_rebalance and abs(desired_qty - current_q) * current_px >= spec.min_notional:
-                    delta_qty = desired_qty - current_q
+                    trade = PortfolioTrade(
+                        product_id=p,
+                        side=side,
+                        entry_time=ts[pos_entry_bar[p]],
+                        exit_time=current_time,
+                        entry_px=pos_entry_px[p],
+                        exit_px=current_px,
+                        qty=q,
+                        pnl=pnl,
+                        fees=pos_entry_fees[p] + exit_fee,
+                        funding=pos_funding_accrued[p],
+                        exit_reason="signal",
+                    )
+                    all_trades.append(trade)
+                    trades_by_asset[p].append(trade)
 
-                    # 1. Closing existing position (or flipping)
-                    if (current_q > 0 and delta_qty < 0) or (current_q < 0 and delta_qty > 0):
-                        close_portion = min(abs(current_q), abs(delta_qty))
-                        exit_fee = close_portion * current_px * spec.maker_fee_rate
-                        pnl = (current_px - pos_entry_px[p]) * (close_portion if current_q > 0 else -close_portion) - exit_fee
-                        cash += (current_px - pos_entry_px[p]) * (close_portion if current_q > 0 else -close_portion) - exit_fee
-                        total_fees_paid += exit_fee
-                        bar_fees += exit_fee
+                    pos_qty[p] = 0.0
+                    pos_entry_px[p] = 0.0
+                    pos_entry_bar[p] = -1
+                    pos_entry_fees[p] = 0.0
+                    pos_funding_accrued[p] = 0.0
+                    pos_tranche[p] = 0
 
-                        trade = PortfolioTrade(
-                            product_id=p,
-                            side=1 if current_q > 0 else -1,
-                            entry_time=ts[pos_entry_bar[p]],
-                            exit_time=current_time,
-                            entry_px=pos_entry_px[p],
-                            exit_px=current_px,
-                            qty=close_portion,
-                            pnl=pnl,
-                            fees=exit_fee,
-                            funding=pos_funding_accrued[p],
-                            exit_reason="signal",
-                        )
-                        all_trades.append(trade)
-                        trades_by_asset[p].append(trade)
+                # B. Opening New Position (Tranche 1 Long or Bear Short)
+                elif current_tr == 0 and target_tr != 0 and prev_tr == 0:
+                    target_w = asig.target_weight[t]
+                    dollar_notional = current_equity * abs(target_w)
+                    q = spec.floor_to_lot(dollar_notional / current_px)
 
-                        # If flipped or fully closed
-                        if abs(current_q) <= close_portion:
-                            pos_qty[p] = 0.0
-                            pos_entry_px[p] = 0.0
-                            pos_entry_bar[p] = -1
-                            pos_entry_fees[p] = 0.0
-                            pos_funding_accrued[p] = 0.0
-                        else:
-                            pos_qty[p] = (current_q - close_portion) if current_q > 0 else (current_q + close_portion)
+                    if q * current_px >= spec.min_notional:
+                        fee = q * current_px * spec.maker_fee_rate
+                        cash -= fee
+                        total_fees_paid += fee
+                        bar_fees += fee
 
-                    # 2. Opening or expanding in the same direction
-                    new_open_qty = desired_qty - pos_qty[p]
-                    if abs(new_open_qty) * current_px >= spec.min_notional and (new_open_qty * desired_qty > 0):
-                        open_fee = abs(new_open_qty) * current_px * spec.maker_fee_rate
-                        cash -= open_fee
-                        total_fees_paid += open_fee
-                        bar_fees += open_fee
+                        pos_qty[p] = q if target_tr > 0 else -q
+                        pos_entry_px[p] = current_px
+                        pos_entry_bar[p] = t
+                        pos_entry_fees[p] = fee
+                        pos_funding_accrued[p] = 0.0
+                        pos_tranche[p] = target_tr
 
-                        # Weighted average entry price
-                        old_notional = abs(pos_qty[p]) * pos_entry_px[p]
-                        add_notional = abs(new_open_qty) * current_px
-                        tot_qty = abs(pos_qty[p]) + abs(new_open_qty)
-                        pos_entry_px[p] = (old_notional + add_notional) / max(tot_qty, 1e-6) if tot_qty > 0 else current_px
-                        pos_qty[p] = desired_qty
-                        if pos_entry_bar[p] == -1:
-                            pos_entry_bar[p] = t
-                        pos_entry_fees[p] += open_fee
+                # C. Pyramiding into Established Winner (Tranche 2 or 3)
+                elif target_tr > current_tr and current_tr > 0:
+                    add_w = cfg.tranche_2_leverage if target_tr == 2 else cfg.tranche_3_leverage
+                    dollar_notional = current_equity * add_w
+                    add_q = spec.floor_to_lot(dollar_notional / current_px)
+
+                    if add_q * current_px >= spec.min_notional:
+                        fee = add_q * current_px * spec.maker_fee_rate
+                        cash -= fee
+                        total_fees_paid += fee
+                        bar_fees += fee
+
+                        # Maintain weighted average entry price
+                        old_val = abs(pos_qty[p]) * pos_entry_px[p]
+                        new_val = add_q * current_px
+                        tot_q = abs(pos_qty[p]) + add_q
+                        pos_entry_px[p] = (old_val + new_val) / tot_q
+                        pos_qty[p] = tot_q
+                        pos_entry_fees[p] += fee
+                        pos_tranche[p] = target_tr
 
         # Update curves
         equity_curve[t] = max(0.0, current_equity)

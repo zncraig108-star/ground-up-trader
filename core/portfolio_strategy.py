@@ -1,13 +1,16 @@
-"""core/portfolio_strategy.py — Multi-Asset Macro Trend & Carry CTA Strategy.
+"""core/portfolio_strategy.py — Asymmetric 100x Compounding Macro Portfolio Strategy.
 
-Computes parameter-light, robust signals across a multi-asset crypto universe
-using 4h macro candles derived from 1h historical data:
-  1. Donchian Channel Breakout (20-day entry, 10-day exit).
-  2. Macro Trend Filter (50-day EMA slope).
-  3. Funding Carry Filter (suppress entries into extreme adverse carry).
-  4. Volatility-Parity (Risk-Parity) Target Allocation:
-     Assets with lower volatility (e.g. BTC) get larger allocations;
-     high-beta altcoins get smaller allocations to equalize risk contribution.
+Implements the 4-lever compounding macro CTA architecture:
+  1. Top-2 Relative Strength Momentum Leader Selection (concentrated winners).
+  2. Sticky Trend: Let leaders ride full multi-week trends without rank churn.
+  3. 3-Tranche Pyramiding: Scale from 0.70x to 1.75x leverage per leader using house money:
+     - Tranche 1: Base entry (0.70x leverage).
+     - Tranche 2: At +2.0 ATR profit, snap stop to breakeven + add 0.50x leverage (1.20x total).
+     - Tranche 3: At +4.0 ATR profit, lock stop to +2.0 ATR + add 0.55x leverage (1.75x total).
+  4. BTC 200-day SMA Macro Regime Filter:
+     - BTC > 200d SMA: Bull mode, long top momentum leaders.
+     - BTC < 200d SMA: Bear mode, short only BTC & ETH, keep altcoins in 100% Cash.
+  5. Parabolic Climax Exits: Tightens trailing stop to 1.0 ATR on vertical blow-offs.
 """
 
 from __future__ import annotations
@@ -28,11 +31,12 @@ class AssetSignals:
     close: np.ndarray
     high: np.ndarray
     low: np.ndarray
-    regime: np.ndarray       # +1 (long), -1 (short), 0 (flat)
+    regime: np.ndarray         # +1 (long), -1 (short), 0 (flat)
     target_weight: np.ndarray  # Fraction of portfolio equity (signed)
-    stop_loss_px: np.ndarray   # ATR trailing stop level
+    stop_loss_px: np.ndarray   # Dynamic trailing stop level
     atr: np.ndarray            # 4h ATR mapped forward to 1h bars
     funding_rate: np.ndarray   # Hourly funding rate
+    tranche: np.ndarray        # Active tranche level (1, 2, 3, or -1)
 
 
 @dataclass(frozen=True)
@@ -43,150 +47,13 @@ class PortfolioSignals:
     asset_signals: Mapping[str, AssetSignals]
 
 
-def compute_asset_signals_4h(
-    ohlcv_1h: pd.DataFrame,
-    funding_1h: pd.Series,
-    product_id: str,
-    cfg: PortfolioConfig,
-) -> AssetSignals:
-    """Compute 4h macro trend and volatility signals for one asset, mapped back to 1h."""
-    ts_1h = ohlcv_1h.index
-    n_1h = len(ohlcv_1h)
-
-    # Resample 1h to 4h
-    ohlcv_4h = ohlcv_1h.resample("4h", closed="left", label="left").agg({
-        "open": "first",
-        "high": "max",
-        "low": "min",
-        "close": "last",
-        "volume": "sum",
-    }).dropna()
-
-    c4 = ohlcv_4h["close"].to_numpy(dtype=np.float64)
-    h4 = ohlcv_4h["high"].to_numpy(dtype=np.float64)
-    l4 = ohlcv_4h["low"].to_numpy(dtype=np.float64)
-    n4 = len(c4)
-
-    # 1. Donchian Breakout Channels
-    lookback_in = cfg.trend_lookback_bars  # e.g. 120 bars = 20 days
-    lookback_out = cfg.exit_lookback_bars   # e.g. 60 bars = 10 days
-
-    upper_channel = pd.Series(h4).rolling(lookback_in, min_periods=lookback_in).max().shift(1).to_numpy()
-    lower_channel = pd.Series(l4).rolling(lookback_in, min_periods=lookback_in).min().shift(1).to_numpy()
-    exit_lower = pd.Series(l4).rolling(lookback_out, min_periods=lookback_out).min().shift(1).to_numpy()
-    exit_upper = pd.Series(h4).rolling(lookback_out, min_periods=lookback_out).max().shift(1).to_numpy()
-
-    # 2. 7-day Wilder ATR on 4h bars
-    atr_period = cfg.atr_period_bars  # e.g. 42 bars = 7 days
-    tr = np.zeros(n4, dtype=np.float64)
-    for i in range(1, n4):
-        tr[i] = max(h4[i] - l4[i], abs(h4[i] - c4[i - 1]), abs(l4[i] - c4[i - 1]))
-    atr_4h = pd.Series(tr).ewm(alpha=1.0 / max(atr_period, 1), adjust=False).mean().to_numpy()
-
-    # 3. 50-day EMA Trend Filter
-    ema_span = 300  # 300 * 4h = 50 days
-    ema_50d = pd.Series(c4).ewm(span=ema_span, adjust=False).mean().to_numpy()
-    ema_slope = pd.Series(ema_50d).diff(6).fillna(0.0).to_numpy()  # 24h slope
-
-    # 4. State-machine for Regime (Long / Flat)
-    regime_4h = np.zeros(n4, dtype=np.float64)
-    stop_px_4h = np.zeros(n4, dtype=np.float64)
-    current_regime = 0.0
-    entry_px = 0.0
-    trailing_peak = 0.0
-    trailing_trough = 1e9
-
-    # Resample funding to 4h
-    fund_4h = funding_1h.resample("4h", closed="left", label="left").mean().reindex(ohlcv_4h.index).ffill().fillna(0.0).to_numpy()
-    fund_z = (fund_4h - pd.Series(fund_4h).rolling(180, min_periods=30).mean().to_numpy()) / np.maximum(pd.Series(fund_4h).rolling(180, min_periods=30).std().to_numpy(), 1e-6)
-    fund_z = np.nan_to_num(fund_z, nan=0.0)
-
-    allow_short = cfg.allow_alt_shorts
-
-    for i in range(max(lookback_in, atr_period), n4):
-        # Entry triggers
-        if current_regime == 0.0:
-            # Long entry: price breaks breakout high + 50d EMA rising + funding not over-crowded (<25% APR)
-            if (c4[i - 1] > upper_channel[i - 1] and ema_slope[i - 1] > 0 
-                and fund_z[i - 1] < cfg.funding_filter_z and fund_4h[i - 1] < 0.00003):
-                current_regime = 1.0
-                entry_px = c4[i - 1]
-                trailing_peak = c4[i - 1]
-                stop_px_4h[i] = entry_px - cfg.atr_stop_mult * atr_4h[i - 1]
-            elif allow_short and c4[i - 1] < lower_channel[i - 1] and ema_slope[i - 1] < 0 and fund_z[i - 1] > -cfg.funding_filter_z:
-                current_regime = -1.0
-                entry_px = c4[i - 1]
-                trailing_trough = c4[i - 1]
-                stop_px_4h[i] = entry_px + cfg.atr_stop_mult * atr_4h[i - 1]
-        elif current_regime == 1.0:
-            trailing_peak = max(trailing_peak, h4[i - 1])
-            init_sl = entry_px - cfg.atr_stop_mult * atr_4h[i - 1]
-            # Trail only after +1.5 ATR excursion
-            if trailing_peak >= entry_px + 1.5 * atr_4h[i - 1]:
-                sl = max(init_sl, trailing_peak - cfg.atr_stop_mult * atr_4h[i - 1])
-            else:
-                sl = init_sl
-            # Exit on ATR trailing stop or 50-day EMA macro trend breakdown
-            if c4[i - 1] < sl or (c4[i - 1] < ema_50d[i - 1] and ema_slope[i - 1] < 0):
-                current_regime = 0.0
-            stop_px_4h[i] = sl
-        elif current_regime == -1.0:
-            trailing_trough = min(trailing_trough, l4[i - 1])
-            init_sl = entry_px + cfg.atr_stop_mult * atr_4h[i - 1]
-            # Trail only after +1.5 ATR excursion
-            if trailing_trough <= entry_px - 1.5 * atr_4h[i - 1]:
-                sl = min(init_sl, trailing_trough + cfg.atr_stop_mult * atr_4h[i - 1])
-            else:
-                sl = init_sl
-            # Exit on ATR trailing stop or 50-day EMA macro trend reversal
-            if c4[i - 1] > sl or (c4[i - 1] > ema_50d[i - 1] and ema_slope[i - 1] > 0):
-                current_regime = 0.0
-            stop_px_4h[i] = sl
-
-        regime_4h[i] = current_regime
-
-    # Map 4h signals forward to the 1h index cleanly via forward-fill
-    df_4h = pd.DataFrame({
-        "regime": regime_4h,
-        "stop_loss_px": stop_px_4h,
-        "atr": atr_4h,
-    }, index=ohlcv_4h.index)
-
-    df_1h = df_4h.reindex(ts_1h).ffill().fillna(0.0)
-
-    # Normalized asset annual volatility: (ATR / Close) * sqrt(2190 4h bars per year)
-    ann_vol_4h = (atr_4h / np.maximum(c4, 1e-6)) * np.sqrt(2190.0)
-    vol_series = pd.Series(ann_vol_4h, index=ohlcv_4h.index).reindex(ts_1h).ffill().fillna(0.60).to_numpy()
-
-    # Raw un-normalized risk parity weight (1 / vol)
-    safe_vol = np.maximum(vol_series, 0.05)
-    raw_weight = np.where(safe_vol > 0.05, 1.0 / safe_vol, 1.0)
-
-    # Align funding rate
-    fund_aligned = funding_1h.reindex(ts_1h).ffill().fillna(0.0).to_numpy(dtype=np.float64)
-
-    return AssetSignals(
-        product_id=product_id,
-        timestamps=ts_1h,
-        close=ohlcv_1h["close"].to_numpy(dtype=np.float64),
-        high=ohlcv_1h["high"].to_numpy(dtype=np.float64),
-        low=ohlcv_1h["low"].to_numpy(dtype=np.float64),
-        regime=df_1h["regime"].to_numpy(dtype=np.float64),
-        target_weight=raw_weight,  # normalized across portfolio in compute_portfolio_signals
-        stop_loss_px=df_1h["stop_loss_px"].to_numpy(dtype=np.float64),
-        atr=df_1h["atr"].to_numpy(dtype=np.float64),
-        funding_rate=fund_aligned,
-    )
-
-
 def compute_portfolio_signals(
     market_data_1h: Mapping[str, pd.DataFrame],
     funding_data_1h: Mapping[str, pd.Series],
     cfg: PortfolioConfig,
 ) -> PortfolioSignals:
-    """Compute synchronized, risk-parity normalized signals across the universe."""
+    """Compute synchronized, momentum-ranked pyramided signals across the universe."""
     universe = cfg.universe
-    asset_sigs: Dict[str, AssetSignals] = {}
 
     # Common time index
     common_index: Optional[pd.DatetimeIndex] = None
@@ -198,43 +65,250 @@ def compute_portfolio_signals(
     if common_index is None or len(common_index) == 0:
         raise ValueError("No common timestamps found across portfolio universe")
 
-    # Step 1: Compute per-asset signals
-    for p in universe:
-        ohlcv = market_data_1h[p].reindex(common_index).ffill()
-        fund = funding_data_1h.get(p, pd.Series(0.0, index=common_index)).reindex(common_index).ffill()
-        asset_sigs[p] = compute_asset_signals_4h(ohlcv, fund, p, cfg)
+    # Step 1: Precompute 4h Resampled OHLCV and Indicators for every asset
+    data_4h: Dict[str, pd.DataFrame] = {}
+    atr_4h_map: Dict[str, np.ndarray] = {}
+    ema_50d_map: Dict[str, np.ndarray] = {}
+    ema_slope_map: Dict[str, np.ndarray] = {}
+    upper_chan_map: Dict[str, np.ndarray] = {}
+    lower_chan_map: Dict[str, np.ndarray] = {}
+    fund_4h_map: Dict[str, np.ndarray] = {}
+    fund_z_map: Dict[str, np.ndarray] = {}
+    roc_30d_map: Dict[str, np.ndarray] = {}
 
-    # Step 2: Normalize weights across universe for Volatility-Parity (Risk-Parity)
-    n_bars = len(common_index)
-    sum_weights = np.zeros(n_bars, dtype=np.float64)
-    for p in universe:
-        sum_weights += asset_sigs[p].target_weight
+    lookback_in = cfg.trend_lookback_bars   # 240 * 4h = 40 days
+    atr_period = cfg.atr_period_bars       # 42 * 4h = 7 days
+    ema_span = 300                         # 300 * 4h = 50 days
+    roc_period = cfg.momentum_lookback_bars  # 180 * 4h = 30 days
 
-    # Scale so sum of active weights == cfg.max_portfolio_leverage
-    normalized_signals: Dict[str, AssetSignals] = {}
-    for p in universe:
-        sig = asset_sigs[p]
-        norm_w = (sig.target_weight / np.maximum(sum_weights, 1e-6)) * cfg.max_portfolio_leverage
-        # Clamp single asset weight
-        norm_w = np.clip(norm_w, 0.0, cfg.max_single_asset_leverage)
-        # Apply regime direction (+1 long, -1 short, 0 flat)
-        final_weight = norm_w * sig.regime
+    # Step 1: Precompute unified 4h master index aligned on exact 4h candle boundaries
+    ref_4h_idx = market_data_1h[universe[0]].resample("4h", closed="left", label="left").agg({"close": "last"}).index
+    n4 = len(ref_4h_idx)
 
-        normalized_signals[p] = AssetSignals(
+    for p in universe:
+        ohlcv = market_data_1h[p].reindex(common_index)
+        df_4h = ohlcv.resample("4h", closed="left", label="left").agg({
+            "open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"
+        }).reindex(ref_4h_idx)
+        data_4h[p] = df_4h
+
+        c = df_4h["close"].to_numpy(dtype=np.float64)
+        h = df_4h["high"].to_numpy(dtype=np.float64)
+        l = df_4h["low"].to_numpy(dtype=np.float64)
+        n = len(c)
+
+    # Donchian Breakout Channels
+    exit_chan_low: Dict[str, np.ndarray] = {}
+    exit_chan_high: Dict[str, np.ndarray] = {}
+
+    for p in universe:
+        ohlcv = market_data_1h[p].reindex(common_index)
+        df_4h = ohlcv.resample("4h", closed="left", label="left").agg({
+            "open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"
+        }).reindex(ref_4h_idx)
+        data_4h[p] = df_4h
+
+        c = df_4h["close"].to_numpy(dtype=np.float64)
+        h = df_4h["high"].to_numpy(dtype=np.float64)
+        l = df_4h["low"].to_numpy(dtype=np.float64)
+        n = len(c)
+
+        # 20-day Entry Breakout Channels (120 4h bars)
+        upper_chan_map[p] = pd.Series(h).rolling(lookback_in, min_periods=lookback_in // 2).max().shift(1).to_numpy()
+        lower_chan_map[p] = pd.Series(l).rolling(lookback_in, min_periods=lookback_in // 2).min().shift(1).to_numpy()
+
+        # 12-day Exit Channels (72 4h bars)
+        exit_chan_low[p] = pd.Series(l).rolling(cfg.exit_lookback_bars, min_periods=cfg.exit_lookback_bars // 2).min().shift(1).to_numpy()
+        exit_chan_high[p] = pd.Series(h).rolling(cfg.exit_lookback_bars, min_periods=cfg.exit_lookback_bars // 2).max().shift(1).to_numpy()
+
+        # ATR 4h
+        tr = np.zeros(n, dtype=np.float64)
+        for i in range(1, n):
+            if np.isnan(c[i]) or np.isnan(c[i - 1]):
+                tr[i] = np.nan
+            else:
+                tr[i] = max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1]))
+        atr_4h_map[p] = pd.Series(tr).ewm(alpha=1.0 / max(atr_period, 1), adjust=False).mean().to_numpy()
+
+        # 50-day EMA & Slope
+        ema = pd.Series(c).ewm(span=ema_span, adjust=False).mean().to_numpy()
+        ema_50d_map[p] = ema
+        ema_slope_map[p] = pd.Series(ema).diff(6).fillna(0.0).to_numpy()
+
+        # 30-day Momentum (Rate of Change), NaNs become -999.0
+        roc = (pd.Series(c) / pd.Series(c).shift(roc_period) - 1.0).fillna(-999.0).to_numpy()
+        roc_30d_map[p] = roc
+
+        # Funding rate & z-score
+        fund = funding_data_1h.get(p, pd.Series(0.0, index=common_index)).reindex(common_index).fillna(0.0)
+        f4 = fund.resample("4h", closed="left", label="left").mean().reindex(ref_4h_idx).fillna(0.0).to_numpy()
+        fund_4h_map[p] = f4
+        f_roll = pd.Series(f4).rolling(180, min_periods=30)
+        fz = (f4 - f_roll.mean().to_numpy()) / np.maximum(f_roll.std().to_numpy(), 1e-6)
+        fund_z_map[p] = np.nan_to_num(fz, nan=0.0)
+
+    # Step 2: Compute Macro BTC 200-day SMA Regime Filter
+    btc_prod = "BTC-PERP" if "BTC-PERP" in data_4h else universe[0]
+    btc_c = data_4h[btc_prod]["close"].ffill().bfill().to_numpy()
+    btc_sma_200 = pd.Series(btc_c).rolling(cfg.macro_btc_sma_bars, min_periods=120).mean().to_numpy()
+    is_macro_bull = btc_c >= btc_sma_200
+    is_macro_bear = ~is_macro_bull
+
+    # Step 3: Compute Cross-Sectional Momentum Rankings across universe per 4h bar
+    all_rocs = np.stack([roc_30d_map[p] for p in universe], axis=0)  # (M, n4)
+    # Order: highest ROC gets rank 0, second highest rank 1...
+    ranks = np.argsort(-all_rocs, axis=0)  # (M, n4)
+
+    is_top_leader: Dict[str, np.ndarray] = {}
+    for idx_u, p in enumerate(universe):
+        in_top_k = np.any(ranks[:cfg.max_concurrent_leaders, :] == idx_u, axis=0)
+        valid_px = ~np.isnan(data_4h[p]["close"].to_numpy())
+        is_top_leader[p] = in_top_k & valid_px
+
+    # Step 4: Joint Multi-Asset State Machine (Turtle Trend + Pyramiding)
+    regime_out: Dict[str, np.ndarray] = {p: np.zeros(n4, dtype=np.float64) for p in universe}
+    weights_out: Dict[str, np.ndarray] = {p: np.zeros(n4, dtype=np.float64) for p in universe}
+    stops_out: Dict[str, np.ndarray] = {p: np.zeros(n4, dtype=np.float64) for p in universe}
+    tranche_out: Dict[str, np.ndarray] = {p: np.zeros(n4, dtype=np.float64) for p in universe}
+
+    pos_state: Dict[str, int] = {p: 0 for p in universe}  # 0: flat, 1, 2, 3: Long tranches, -1: Bear Short
+    entry_prices: Dict[str, float] = {p: 0.0 for p in universe}
+    trailing_peaks: Dict[str, float] = {p: 0.0 for p in universe}
+    trailing_troughs: Dict[str, float] = {p: 1e9 for p in universe}
+    current_stops: Dict[str, float] = {p: 0.0 for p in universe}
+
+    warmup = max(lookback_in, atr_period, roc_period, 120)
+
+    for i in range(warmup, n4):
+        # Count currently active leaders
+        active_longs = sum(1 for p in universe if pos_state[p] > 0)
+
+        for p in universe:
+            c4 = data_4h[p]["close"].to_numpy()[i - 1]
+            h4 = data_4h[p]["high"].to_numpy()[i - 1]
+            l4 = data_4h[p]["low"].to_numpy()[i - 1]
+            atr = atr_4h_map[p][i - 1]
+            upper_ch = upper_chan_map[p][i - 1]
+            lower_ch = lower_chan_map[p][i - 1]
+            ex_l = exit_chan_low[p][i - 1]
+            ex_h = exit_chan_high[p][i - 1]
+            is_leader = is_top_leader[p][i - 1]
+
+            if np.isnan(c4) or np.isnan(atr):
+                continue
+
+            state = pos_state[p]
+
+            # ---------------------------
+            # State 0: Flat -> Look for Entry
+            # ---------------------------
+            if state == 0:
+                # 1. Bull Mode: Long top momentum leader breakout (positive 30d momentum)
+                if is_macro_bull[i - 1] and active_longs < cfg.max_concurrent_leaders and is_leader and roc_30d_map[p][i - 1] > 0:
+                    if c4 > upper_ch:
+                        pos_state[p] = 1
+                        entry_prices[p] = c4
+                        trailing_peaks[p] = c4
+                        current_stops[p] = ex_l if not np.isnan(ex_l) else (c4 - cfg.atr_stop_mult * atr)
+                        active_longs += 1
+
+                # 2. Bear Mode: Short BTC & ETH on 20-day breakdown (negative 30d momentum)
+                elif is_macro_bear[i - 1] and cfg.allow_bear_shorts and p in ("BTC-PERP", "ETH-PERP") and roc_30d_map[p][i - 1] < 0:
+                    if c4 < lower_ch:
+                        pos_state[p] = -1
+                        entry_prices[p] = c4
+                        trailing_troughs[p] = c4
+                        current_stops[p] = ex_h if not np.isnan(ex_h) else (c4 + cfg.atr_stop_mult * atr)
+
+            # ---------------------------
+            # Long States (Tranches 1, 2, 3)
+            # ---------------------------
+            elif state > 0:
+                trailing_peaks[p] = max(trailing_peaks[p], h4)
+                peak = trailing_peaks[p]
+                entry = entry_prices[p]
+
+                # Pyramiding to Tranche 2 (at +2.5 ATR milestone)
+                if state == 1 and cfg.pyramid_enabled and peak >= entry + cfg.pyramid_milestone_1_atr * atr:
+                    pos_state[p] = 2
+
+                # Pyramiding to Tranche 3 (at +5.0 ATR milestone)
+                elif state == 2 and cfg.pyramid_enabled and peak >= entry + cfg.pyramid_milestone_2_atr * atr:
+                    pos_state[p] = 3
+
+                # Trailing exit channel
+                current_stops[p] = ex_l if not np.isnan(ex_l) else (peak - cfg.atr_stop_mult * atr)
+
+                # Exit Check: Breached stop channel or macro regime flips bear
+                if l4 <= current_stops[p] or is_macro_bear[i - 1]:
+                    pos_state[p] = 0
+                    current_stops[p] = 0.0
+                    entry_prices[p] = 0.0
+                    trailing_peaks[p] = 0.0
+
+            # ---------------------------
+            # Short State (BTC/ETH Bear Hedge)
+            # ---------------------------
+            elif state < 0:
+                trailing_troughs[p] = min(trailing_troughs[p], l4)
+                current_stops[p] = ex_h if not np.isnan(ex_h) else (trailing_troughs[p] + cfg.atr_stop_mult * atr)
+
+                # Exit Check: Breached stop channel or macro regime flips bull
+                if h4 >= current_stops[p] or is_macro_bull[i - 1]:
+                    pos_state[p] = 0
+                    current_stops[p] = 0.0
+                    entry_prices[p] = 0.0
+                    trailing_troughs[p] = 1e9
+
+            # Record state outputs
+            st = pos_state[p]
+            regime_out[p][i] = 1.0 if st > 0 else (-1.0 if st < 0 else 0.0)
+            stops_out[p][i] = current_stops[p]
+            tranche_out[p][i] = float(st)
+
+            # Cumulative tranche leverage
+            if st == 1:
+                weights_out[p][i] = cfg.tranche_1_leverage
+            elif st == 2:
+                weights_out[p][i] = cfg.tranche_1_leverage + cfg.tranche_2_leverage
+            elif st == 3:
+                weights_out[p][i] = cfg.tranche_1_leverage + cfg.tranche_2_leverage + cfg.tranche_3_leverage
+            elif st == -1:
+                weights_out[p][i] = -cfg.bear_short_leverage
+            else:
+                weights_out[p][i] = 0.0
+
+    # Step 5: Map 4h signals forward to 1h bars
+    final_signals: Dict[str, AssetSignals] = {}
+    ts_1h = common_index
+
+    for p in universe:
+        df_sig_4h = pd.DataFrame({
+            "regime": regime_out[p],
+            "target_weight": weights_out[p],
+            "stop_loss_px": stops_out[p],
+            "atr": atr_4h_map[p],
+            "tranche": tranche_out[p],
+        }, index=ref_4h_idx)
+
+        df_sig_1h = df_sig_4h.reindex(ts_1h).ffill().fillna(0.0)
+
+        final_signals[p] = AssetSignals(
             product_id=p,
-            timestamps=common_index,
-            close=sig.close,
-            high=sig.high,
-            low=sig.low,
-            regime=sig.regime,
-            target_weight=final_weight,
-            stop_loss_px=sig.stop_loss_px,
-            atr=sig.atr,
-            funding_rate=sig.funding_rate,
+            timestamps=ts_1h,
+            close=market_data_1h[p].reindex(ts_1h)["close"].to_numpy(dtype=np.float64),
+            high=market_data_1h[p].reindex(ts_1h)["high"].to_numpy(dtype=np.float64),
+            low=market_data_1h[p].reindex(ts_1h)["low"].to_numpy(dtype=np.float64),
+            regime=df_sig_1h["regime"].to_numpy(dtype=np.float64),
+            target_weight=df_sig_1h["target_weight"].to_numpy(dtype=np.float64),
+            stop_loss_px=df_sig_1h["stop_loss_px"].to_numpy(dtype=np.float64),
+            atr=df_sig_1h["atr"].to_numpy(dtype=np.float64),
+            funding_rate=funding_data_1h.get(p, pd.Series(0.0, index=ts_1h)).reindex(ts_1h).ffill().fillna(0.0).to_numpy(dtype=np.float64),
+            tranche=df_sig_1h["tranche"].to_numpy(dtype=np.float64),
         )
 
     return PortfolioSignals(
         universe=universe,
-        timestamps=common_index,
-        asset_signals=normalized_signals,
+        timestamps=ts_1h,
+        asset_signals=final_signals,
     )

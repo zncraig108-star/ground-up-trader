@@ -150,15 +150,16 @@ def load_portfolio_data(
         # Graceful fallback: if real data isn't fully downloaded, return synthetic bundle
         return make_synthetic_portfolio(cfg)
 
-    # Align common timestamps
-    common_idx = None
+    # Align across the full union of timestamps so 2021-2023 history is preserved
+    union_idx = None
     for p in cfg.universe:
         idx = market_data[p].index
-        common_idx = idx if common_idx is None else common_idx.intersection(idx)
+        union_idx = idx if union_idx is None else union_idx.union(idx)
+    union_idx = union_idx.sort_values()
 
     for p in cfg.universe:
-        market_data[p] = market_data[p].reindex(common_idx).ffill()
-        funding_data[p] = funding_data[p].reindex(common_idx).ffill().fillna(0.0)
+        market_data[p] = market_data[p].reindex(union_idx)
+        funding_data[p] = funding_data[p].reindex(union_idx).fillna(0.0)
 
     return PortfolioDataBundle(
         universe=cfg.universe,

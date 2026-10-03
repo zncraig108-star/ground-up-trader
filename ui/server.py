@@ -562,6 +562,34 @@ async def backtest_year(year: str, request: Request, genome_id: Optional[str] = 
     return dash.backtest_year(year, genome_id)
 
 
+# ---------------------------------------------------------------------------
+# Multi-Asset Macro CTA Portfolio Endpoints (100x Engine)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/portfolio/summary")
+async def portfolio_summary() -> dict:
+    from ui.portfolio_service import PortfolioService
+    return PortfolioService.get_instance().get_summary()
+
+
+@app.get("/api/portfolio/oos")
+async def portfolio_oos() -> dict:
+    from ui.portfolio_service import PortfolioService
+    return PortfolioService.get_instance().get_oos_report()
+
+
+@app.get("/api/portfolio/equity")
+async def portfolio_equity(max_points: int = 600) -> dict:
+    from ui.portfolio_service import PortfolioService
+    return PortfolioService.get_instance().get_equity_curve(max_points=max_points)
+
+
+@app.get("/api/portfolio/trades")
+async def portfolio_trades(limit: int = 150) -> List[dict]:
+    from ui.portfolio_service import PortfolioService
+    return PortfolioService.get_instance().get_trades(limit=limit)
+
+
 @app.websocket("/ws/evolution")
 async def ws_evolution(websocket: WebSocket) -> None:
     dash: Dashboard = websocket.app.state.dashboard
