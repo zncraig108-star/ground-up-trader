@@ -56,7 +56,19 @@ The **HRT Cycle** is an empirical, scientific workflow designed for autonomous A
                                   │     - Freeze modifications   │
                                   │     - Forensic audit of why  │
                                   │     - Shift macro paradigm   │
-                                  └──────────────────────────────┘
+                                  └──────────────┬───────────────┘
+                                                 │
+                                                 ▼
+                                  ┌──────────────────────────────┐
+                                  │ 4D. THEORIZE & IDEATE        │
+                                  │     - First-principles idea  │
+                                  │     - Inversion & asymmetry  │
+                                  │     - Cross-domain transfer  │
+                                  └──────────────┬───────────────┘
+                                                 │
+                                                 └──────────┐
+                                                            ▼
+                                               (Loop to Phase 1: Hypothesize)
 ```
 
 ---
@@ -113,9 +125,9 @@ A change is only accepted if it passes all three verification tiers:
 
 ---
 
-## Phase 4: Resolution & Ledgering
+## Phase 4: Resolution, Audit & Ideation Loop
 
-### If Verified:
+### 4A. If Verified: Commit & Ledger
 1. Stage modified files (`git add`).
 2. Commit with a clean, descriptive message linking the hypothesis and empirical evidence:
    ```bash
@@ -123,14 +135,20 @@ A change is only accepted if it passes all three verification tiers:
    ```
 3. Document the confirmed finding in the project's experiment ledger.
 
-### If Falsified: Clean Revert & The "Stop, Audit, Zoom Out" Protocol
+### 4B. If Falsified: Clean Revert
+1. Freeze all code edits immediately. Resist the urge to "just tweak one more line".
+2. Run `git restore .` to revert to the last verified baseline. Never construct further changes on top of a compromised or unproven state.
+3. Record the failed hypothesis and the empirical reason it failed in the project's ledger.
+
+---
+
+### 4C. The "Stop, Audit & Zoom Out" Protocol
 
 When an experiment fails, a test breaks, or an optimization stalls, **NEVER engage in reactionary micro-patching or shotgun tweaking**. Immediately execute this three-step protocol:
 
 1. **STOP (Halt & Clean Reset)**:
-   - Freeze all code changes immediately. Resist the urge to "just tweak one more line".
-   - Run `git restore .` to revert to the last verified baseline. Never construct further changes on top of a compromised or unproven state.
    - Break the thrashing loop: recognize that repetitive minor failures signal a flawed causal model, not a parameter tuning issue.
+   - Ensure the working tree is pristine.
 
 2. **AUDIT (Forensic Root Cause Analysis)**:
    - **Audit Assumptions**: What implicit assumptions about data, timing, environment, or execution mechanics were violated?
@@ -142,8 +160,37 @@ When an experiment fails, a test breaks, or an optimization stalls, **NEVER enga
    - **Step Back to First Principles**: What is the structural driver of the underlying system? What natural asymmetry or constraint exists that we are ignoring?
    - **Reframe at the System Level**: Move from micro-parameter tuning to macro-systemic redesign (e.g., shifting timeframes, expanding asset universe, filtering macro regimes, or rethinking risk allocation).
 
-4. **Document in Ledger**:
-   - Record the failed hypothesis, empirical delta, and the "Audit & Zoom Out" diagnostic in the project's experiment ledger. A documented negative result prevents repeating the same dead end.
+---
+
+### 4D. Theorize & Ideate (Generating Breakthrough Ideas)
+
+After zooming out, do not fall back into random guessing. Use systematic theoretical ideation frameworks to brainstorm high-conviction, non-obvious hypotheses:
+
+### 1. First-Principles Decomposition
+- Strip away convention and break the problem down into fundamental axioms and physical laws:
+  - Where does economic value, edge, or information truly originate in this system?
+  - What are the irreducible physical constraints (e.g., fees, latency, orderbook depth, entropy, signal-to-noise ratio)?
+  - What behavioral or structural forces cause market participants to be forced, programmatic, or systematically biased?
+
+### 2. Inversion (Munger's Inversion Principle)
+- Instead of asking *"How do we make 100x?"*, ask: *"What guarantees failure, zero alpha, or capital destruction?"*
+  - *Failure mode 1*: Over-trading in chop $\rightarrow$ **Invert**: Require regime/trend filters; hold longer; do nothing when unaligned.
+  - *Failure mode 2*: Fee bleeding $\rightarrow$ **Invert**: Widen profit targets; trade higher timeframes; reduce rebalancing frequency.
+  - *Failure mode 3*: Fighting secular momentum $\rightarrow$ **Invert**: Asymmetric directional alignment (longs in secular bull regimes, shorts only in macro bears).
+
+### 3. Asymmetry & Convexity Seeking
+- Hunt for mechanics with positive skew:
+  - **Bounded Downside**: Small, fixed initial risk or dynamic trailing stops that kill false breakouts quickly.
+  - **Uncapped Fat-Tailed Upside**: Compounding position sizing, letting macro trends run over weeks/months, and multi-asset diversification that captures monster outlier runs.
+
+### 4. Cross-Domain Analogy & Mechanistic Transfer
+- Borrow proven models from other disciplines:
+  - **Control Theory**: Damped feedback loops, PID controllers, and Kalman filters for dynamic volatility scaling.
+  - **Thermodynamics & Information Theory**: Shannon entropy for regime detection, energy states for breakout accumulation.
+  - **Evolutionary Biology & Ecology**: Portfolio diversity, orthogonal niche strategies, and environmental adaptation.
+
+### 5. Synthesize into Phase 1 Hypothesis
+- Convert the top theoretical concept into a formal, falsifiable `[H-00X]` hypothesis format. Never leap straight to code; theory must precede implementation.
 
 ---
 

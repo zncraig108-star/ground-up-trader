@@ -45,3 +45,9 @@ Use this template to record every hypothesis tested in the project. Maintain thi
 - **ZOOM OUT**:
   - Is the current paradigm or framing flawed?
   - What structural or first-principles macro redesign is indicated?
+
+### 6. Theorize & Ideate (Next Hypothesis Generation)
+- **First-Principles Driver**: Where does alpha/edge physically originate in this context?
+- **Inversion**: What guaranteed failure in previous attempts, and what is its opposite?
+- **Asymmetry**: How can downside be strictly capped while leaving upside convex?
+- **Next Hypothesis**: Seed for `[H-00(X+1)]`.
