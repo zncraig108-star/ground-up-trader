@@ -252,3 +252,21 @@ Permanent scientific ledger tracking all hypotheses, refactors, and empirical te
   - Generates **5.05x return with only 13.27% Max DD (and 8.97% OOS DD)**, while exposing the **99.5x Exponential Compounding engine** side-by-side on the web UI for complete transparency.
 
 
+
+
+## H-010: 15m-trigger / 1h-gate frequency + ladder (research_freq.py, branch exp/frequency-ladder)
+
+Real 1m ETH/SOL/BTC -> 15m bars, whole contracts (MET/SOL/BTI), $500 start, floors 450/500/1000/2000, long+short, taker 5bp + 1.4bp slip per side, 5% APR idle yield. Params tuned on IS (2021-07..2023) only; OOS (2024+) restarted at $500. Lookahead check (truncation invariance) passes.
+
+| Variant | IS | OOS | OOS trades/yr |
+|---|---|---|---|
+| B 15m pullback-resume | 0.94x | 0.91x | 80 |
+| C +delta-flow | 0.98x | 0.90x | 65 |
+| D +relative strength | 0.98x | 0.94x | 58 |
+| E +risk ladder | 0.96x | 0.90x | 99 |
+| E full (flow+RS+ladder) | 0.99x | 0.93x | 56 |
+| ORB + ladder | 0.90x | 0.90x | 36 |
+
+Cost decomposition (B / E full, IS then OOS): zero cost 1.37x/0.96x and 0.97x/1.09x; maker 2bp, no slip 0.98x/0.92x and 1.32x/0.99x.
+
+**Verdict: REJECTED. Goal (>=10x OOS) NOT met.** Frequency was raised 5x (>=40/yr) but there is no gross edge OOS (win ~43-48% at ~1:1 payoff before costs), so more trades only add fee drag. Honest ceiling for these 15m signals is ~0.9-1.1x. Ladder sizing cannot create edge; it only scales it, including negative edge. Some variants end MTM a few dollars under the $450 floor from fee/gap overshoot (minEq 437-446). Prior 1h engine (1.31x OOS) remains the best honest result. Next: real edge sources (funding/basis, cross-venue, event data) not testable with OHLCV alone.
