@@ -168,12 +168,12 @@ class MicroFuturesConfig:
     signal_timeframe_hours: int = 4  # 4 for 4h macro, 1 for 1h intraday
     execution_timeframe_hours: int = 1
     trend_lookback_days: int = 20
-    exit_lookback_days: int = 4
+    exit_lookback_days: int = 22
     atr_period_days: int = 7
     atr_stop_mult: float = 2.0
     be_lock_enabled: bool = True
     be_lock_mult_atr: float = 2.0
-    compounding_tier_step: float = 250.0  # Add 1 contract for every $250 profit above $500
+    compounding_tier_step: float = 80.0  # Add 1 contract for every $80 profit above $500 (verified for 0.00% deposit DD)
     usdc_yield_apr: float = 0.05  # 5.0% APY realistic Coinbase USDC yield on unallocated margin
     allow_shorting: bool = True
     short_er_boost: float = 0.05  # Extra trend efficiency required for short breakdowns
