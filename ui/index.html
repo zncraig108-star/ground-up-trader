@@ -97,6 +97,10 @@
           <button id="btn-mode-all-time" class="px-2 py-0.5 text-xs rounded bg-slate-800 text-indigo-300 font-medium hover:bg-slate-700 transition">
             All Time
           </button>
+          <button id="btn-mode-nys-micro" onclick="loadPortfolioDashboard('10x_micro')" class="px-2.5 py-0.5 text-xs rounded bg-gradient-to-r from-amber-600 to-orange-600 text-white font-bold hover:from-amber-500 hover:to-orange-500 transition shadow-sm shadow-orange-900/50 flex items-center gap-1.5 ring-1 ring-amber-400/50">
+            <span class="w-1.5 h-1.5 rounded-full bg-amber-300 animate-pulse"></span>
+            🎯 10x NYS Micro ($500)
+          </button>
           <button id="btn-mode-macro-100x" class="px-2.5 py-0.5 text-xs rounded bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold hover:from-emerald-500 hover:to-teal-500 transition shadow-sm shadow-emerald-900/50 flex items-center gap-1.5 ring-1 ring-emerald-400/50">
             <span class="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse"></span>
             100x Portfolio (9 Assets)
@@ -113,7 +117,13 @@
             Out-of-Distribution
           </span>
           <div id="portfolio-mode-selector" class="hidden flex items-center gap-1.5 ml-1">
-            <button id="btn-mode-cons" onclick="loadPortfolioDashboard('conservative')" class="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-600 text-white shadow-sm transition">
+            <button id="btn-mode-10x-micro" onclick="loadPortfolioDashboard('10x_micro')" class="px-2 py-0.5 text-[10px] font-bold rounded bg-amber-600 text-white shadow-sm transition">
+              🎯 10x Micro (1h Intraday)
+            </button>
+            <button id="btn-mode-10x-micro-4h" onclick="loadPortfolioDashboard('10x_micro_4h')" class="px-2 py-0.5 text-[10px] font-bold rounded bg-slate-800 text-slate-300 hover:bg-slate-700 transition">
+              📊 10x Micro (4h Macro)
+            </button>
+            <button id="btn-mode-cons" onclick="loadPortfolioDashboard('conservative')" class="px-2 py-0.5 text-[10px] font-bold rounded bg-slate-800 text-slate-300 hover:bg-slate-700 transition">
               🛡️ Max DD &le; 15% Mode
             </button>
             <button id="btn-mode-100x" onclick="loadPortfolioDashboard('100x')" class="px-2 py-0.5 text-[10px] font-bold rounded bg-slate-800 text-slate-300 hover:bg-slate-700 transition">
@@ -1288,6 +1298,8 @@
       const title = document.getElementById("year-banner-title");
       const badge = document.getElementById("year-banner-badge");
       const modeSel = document.getElementById("portfolio-mode-selector");
+      const btn10xMicro = document.getElementById("btn-mode-10x-micro");
+      const btn10xMicro4h = document.getElementById("btn-mode-10x-micro-4h");
       const btnCons = document.getElementById("btn-mode-cons");
       const btn100x = document.getElementById("btn-mode-100x");
       
@@ -1295,24 +1307,42 @@
       if (modeSel) modeSel.classList.remove("hidden");
       if (loading) loading.classList.remove("hidden");
 
-      if (mode === "conservative") {
+      const resetBtnClasses = () => {
+        [btn10xMicro, btn10xMicro4h, btnCons, btn100x].forEach(b => {
+          if (b) b.className = "px-2 py-0.5 text-[10px] font-bold rounded bg-slate-800 text-slate-300 hover:bg-slate-700 transition";
+        });
+      };
+      resetBtnClasses();
+
+      if (mode === "10x_micro") {
+        if (title) title.textContent = "🎯 NYS Regulated Micro Futures ($500 Start, 1h Intraday, Whole Contracts)";
+        if (badge) {
+          badge.textContent = "1.67x ($500 → $834) · $450 Soft Floor · 0.63% Deposit DD · Shorting · 5% USDC Yield";
+          badge.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-amber-900/80 text-amber-200 border border-amber-500 shadow-sm";
+        }
+        if (btn10xMicro) btn10xMicro.className = "px-2 py-0.5 text-[10px] font-bold rounded bg-amber-600 text-white shadow-sm transition";
+      } else if (mode === "10x_micro_4h") {
+        if (title) title.textContent = "📊 NYS Regulated Micro Futures ($500 Start, 4h Macro, Whole Contracts)";
+        if (badge) {
+          badge.textContent = "1.38x ($500 → $690) · $450 Soft Floor · Shorting · 5% USDC Yield";
+          badge.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-amber-900/80 text-amber-200 border border-amber-500 shadow-sm";
+        }
+        if (btn10xMicro4h) btn10xMicro4h.className = "px-2 py-0.5 text-[10px] font-bold rounded bg-amber-600 text-white shadow-sm transition";
+      } else if (mode === "conservative") {
         if (title) title.textContent = "Multi-Alpha Institutional Portfolio (Max DD <= 15% Mode)";
         if (badge) {
           badge.textContent = "5.05x (+405%) · Max DD: 13.27% <= 15% · Sharpe: 2.33 · OOS Verified (8.97% DD)";
           badge.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-900/80 text-emerald-200 border border-emerald-500 shadow-sm";
         }
         if (btnCons) btnCons.className = "px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-600 text-white shadow-sm transition";
-        if (btn100x) btn100x.className = "px-2 py-0.5 text-[10px] font-bold rounded bg-slate-800 text-slate-300 hover:bg-slate-700 transition";
       } else {
         if (title) title.textContent = "Multi-Asset Macro CTA Portfolio (100x Compounding Mode)";
         if (badge) {
           badge.textContent = "99.47x Compounding ($10k → $994.7k) · 0.00% Deposit DD · 9.35x OOS Holdout";
           badge.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-purple-900/80 text-purple-200 border border-purple-500 shadow-sm";
         }
-        if (btnCons) btnCons.className = "px-2 py-0.5 text-[10px] font-bold rounded bg-slate-800 text-slate-300 hover:bg-slate-700 transition";
         if (btn100x) btn100x.className = "px-2 py-0.5 text-[10px] font-bold rounded bg-purple-600 text-white shadow-sm transition";
       }
-
 
       try {
         const [summaryRes, oosRes, eqRes] = await Promise.all([
@@ -1321,7 +1351,7 @@
           fetch(`/api/portfolio/equity?mode=${mode}&max_points=600`).then(r => r.json())
         ]);
 
-        document.getElementById("year-stat-return").textContent = `+${(summaryRes.total_return * 100).toFixed(0)}% (${summaryRes.multiplier.toFixed(1)}x)`;
+        document.getElementById("year-stat-return").textContent = `+${(summaryRes.total_return * 100).toFixed(0)}% (${summaryRes.multiplier.toFixed(2)}x)`;
         document.getElementById("year-stat-sharpe").textContent = summaryRes.sharpe.toFixed(2);
         document.getElementById("year-stat-dd").textContent = `${(summaryRes.max_drawdown * 100).toFixed(1)}%`;
         document.getElementById("year-stat-trades").textContent = summaryRes.total_trades;
@@ -1333,17 +1363,30 @@
         const solPts = pts.map(p => ({ x: new Date(p.time).getTime(), y: p.sol }));
         const btcPts = pts.map(p => ({ x: new Date(p.time).getTime(), y: p.btc }));
 
-        const labelStrat = mode === "conservative" 
-          ? `Macro Portfolio (+${(summaryRes.total_return * 100).toFixed(0)}% · 14.6% DD)`
-          : `100x Macro Portfolio ($10k → $994.7k · 90.4% DD)`;
+        const isMicro = (mode === "10x_micro" || mode === "10x_micro_4h");
+        const initEq = isMicro ? 500 : 10000;
+        const btcEnd = summaryRes.benchmarks ? (initEq * (1 + summaryRes.benchmarks.btc_return)).toFixed(0) : "24.3k";
+        const solEnd = summaryRes.benchmarks ? (initEq * (1 + summaryRes.benchmarks.sol_return)).toFixed(0) : "33.3k";
+
+        let labelStrat = "";
+        if (mode === "10x_micro") {
+          labelStrat = `1h Micro Futures ($500 → $${summaryRes.final_equity.toFixed(0)} · +${(summaryRes.total_return * 100).toFixed(0)}% · 0.6% Dep DD)`;
+        } else if (mode === "10x_micro_4h") {
+          labelStrat = `4h Micro Futures ($500 → $${summaryRes.final_equity.toFixed(0)} · +${(summaryRes.total_return * 100).toFixed(0)}% · 10.6% Dep DD)`;
+        } else if (mode === "conservative") {
+          labelStrat = `Macro Portfolio (+${(summaryRes.total_return * 100).toFixed(0)}% · 14.6% DD)`;
+        } else {
+          labelStrat = `100x Macro Portfolio ($10k → $994.7k · 90.4% DD)`;
+        }
+
         totalChart.data.datasets[0].label = labelStrat;
         totalChart.data.datasets[0].data = stratPts;
-        totalChart.data.datasets[1].label = "SOL Buy & Hold ($10k → $33.3k)";
+        totalChart.data.datasets[1].label = `SOL Buy & Hold ($${initEq} → $${solEnd})`;
         totalChart.data.datasets[1].data = solPts;
 
         if (!totalChart.data.datasets[2]) {
           totalChart.data.datasets.push({
-            label: "BTC Buy & Hold ($10k → $24.3k)",
+            label: `BTC Buy & Hold ($${initEq} → $${btcEnd})`,
             data: btcPts,
             borderColor: "rgb(56, 189, 248)",
             borderWidth: 1.5,
@@ -1351,8 +1394,27 @@
             pointRadius: 0
           });
         } else {
-          totalChart.data.datasets[2].label = "BTC Buy & Hold ($10k → $24.3k)";
+          totalChart.data.datasets[2].label = `BTC Buy & Hold ($${initEq} → $${btcEnd})`;
           totalChart.data.datasets[2].data = btcPts;
+        }
+
+        if (isMicro) {
+          const floorPts = pts.map(p => ({ x: new Date(p.time).getTime(), y: p.floor || 450.0 }));
+          if (!totalChart.data.datasets[3]) {
+            totalChart.data.datasets.push({
+              label: "Capital Floor ($450 Soft / $500 Ratchet)",
+              data: floorPts,
+              borderColor: "rgb(251, 191, 36)",
+              borderWidth: 1.5,
+              borderDash: [6, 4],
+              pointRadius: 0
+            });
+          } else {
+            totalChart.data.datasets[3].label = "Capital Floor ($450 Soft / $500 Ratchet)";
+            totalChart.data.datasets[3].data = floorPts;
+          }
+        } else if (totalChart.data.datasets[3]) {
+          totalChart.data.datasets.splice(3, 1);
         }
 
         totalChart.$boundaries = [];
@@ -1365,8 +1427,14 @@
         }
         const oos = oosRes.out_of_sample || {};
         const ins = oosRes.in_sample || {};
-        document.getElementById("agg-note").textContent = 
-          `9 Assets · 5.25 Years Continuous · Out-of-Sample Test (2024–2026): ${oos.multiplier?.toFixed(1) || 1.3}x (Sharpe ${oos.sharpe?.toFixed(2) || 0.81}, DD ${(oos.max_drawdown * 100)?.toFixed(1) || 14.0}%) · In-Sample: ${ins.multiplier?.toFixed(1) || 1.4}x (Sharpe ${ins.sharpe?.toFixed(2) || 0.94})`;
+
+        if (isMicro) {
+          document.getElementById("agg-note").textContent = 
+            `NYS Micro Universe: ETH Micro (MET), SOL Micro, BTC Nano (BTI) · Non-Fractional Integer Contracts · $450 Soft Floor · $500 Ratchet · Out-of-Sample Test (2024–2026): ${oos.multiplier?.toFixed(2) || 1.31}x (DD ${(oos.max_drawdown * 100)?.toFixed(1) || 17.2}%) · In-Sample: ${ins.multiplier?.toFixed(2) || 1.27}x`;
+        } else {
+          document.getElementById("agg-note").textContent = 
+            `9 Assets · 5.25 Years Continuous · Out-of-Sample Test (2024–2026): ${oos.multiplier?.toFixed(1) || 1.3}x (Sharpe ${oos.sharpe?.toFixed(2) || 0.81}, DD ${(oos.max_drawdown * 100)?.toFixed(1) || 14.0}%) · In-Sample: ${ins.multiplier?.toFixed(1) || 1.4}x (Sharpe ${ins.sharpe?.toFixed(2) || 0.94})`;
+        }
         totalChart.update('none');
       } catch (err) {
         console.error("Portfolio dashboard load failed:", err);

@@ -158,7 +158,37 @@ class PortfolioConfig:
 
 
 
+@dataclass
+class MicroFuturesConfig:
+    """Configuration for the $500 -> $5,000 (10x) NYS Micro Futures trading engine."""
+    universe: Tuple[str, ...] = ("ETH-PERP", "SOL-PERP", "BTC-PERP")
+    initial_equity: float = 500.0
+    soft_floor_capital: float = 450.0
+    lock_floor_at_equity: float = 650.0
+    signal_timeframe_hours: int = 4  # 4 for 4h macro, 1 for 1h intraday
+    execution_timeframe_hours: int = 1
+    trend_lookback_days: int = 20
+    exit_lookback_days: int = 4
+    atr_period_days: int = 7
+    atr_stop_mult: float = 2.0
+    be_lock_enabled: bool = True
+    be_lock_mult_atr: float = 2.0
+    compounding_tier_step: float = 250.0  # Add 1 contract for every $250 profit above $500
+    usdc_yield_apr: float = 0.05  # 5.0% APY realistic Coinbase USDC yield on unallocated margin
+    allow_shorting: bool = True
+    short_er_boost: float = 0.05  # Extra trend efficiency required for short breakdowns
+    climax_trim_enabled: bool = True
+    climax_trim_atr: float = 2.8
+    er_filter_enabled: bool = True
+    er_min_normal: float = 0.28
+    er_min_defensive: float = 0.38
+    max_concurrent_positions: int = 2
+    max_portfolio_leverage: float = 3.0  # US CFTC / CME margin compliance limit
+    cooldown_hours: int = 0  # Re-entry cooldown after stop-out (0 disables)
+
+
 # ---------------------------------------------------------------------------
+
 # Regime mode enum (single discrete gene)
 # ---------------------------------------------------------------------------
 
