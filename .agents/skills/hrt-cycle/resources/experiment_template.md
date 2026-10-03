@@ -33,5 +33,15 @@ Use this template to record every hypothesis tested in the project. Maintain thi
 - **Verdict**: [VERIFIED / FALSIFIED]
 - **Action Taken**: 
   - If Verified: Committed in `git commit -m "..."`.
-  - If Falsified: Reverted via `git restore .`. Recorded lesson learned below.
+  - If Falsified: Reverted via `git restore .`. Followed Stop, Audit & Zoom Out protocol below.
 - **Lesson Learned**: What did this result reveal about the system's underlying dynamics?
+
+### 5. If Falsified: Stop, Audit & Zoom Out Diagnostic
+- **STOP**: Code reverted cleanly via `git restore .`? [Yes/No]
+- **AUDIT**:
+  - Violated assumptions:
+  - Data / pipeline / mechanics audit:
+  - Ledger check (did we already try this?):
+- **ZOOM OUT**:
+  - Is the current paradigm or framing flawed?
+  - What structural or first-principles macro redesign is indicated?

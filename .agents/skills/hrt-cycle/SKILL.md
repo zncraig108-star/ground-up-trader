@@ -48,7 +48,15 @@ The **HRT Cycle** is an empirical, scientific workflow designed for autonomous A
   │ 4A. COMMIT & LEDGER          ││ 4B. CLEAN REVERT             │
   │     - Commit diff with proof ││     - git restore            │
   │     - Record in ledger       ││     - Log why it failed      │
-  └──────────────────────────────┘└──────────────────────────────┘
+  └──────────────────────────────┘└──────────────┬───────────────┘
+                                                 │
+                                                 ▼
+                                  ┌──────────────────────────────┐
+                                  │ 4C. STOP, AUDIT & ZOOM OUT   │
+                                  │     - Freeze modifications   │
+                                  │     - Forensic audit of why  │
+                                  │     - Shift macro paradigm   │
+                                  └──────────────────────────────┘
 ```
 
 ---
@@ -115,9 +123,27 @@ A change is only accepted if it passes all three verification tiers:
    ```
 3. Document the confirmed finding in the project's experiment ledger.
 
-### If Falsified:
-1. Revert immediately using `git restore <files>`. Do not leave broken experiments in the working tree.
-2. Record the failed hypothesis and the empirical reason it failed in the project's ledger. A documented negative result prevents the agent (and future teammates) from repeating the same dead end.
+### If Falsified: Clean Revert & The "Stop, Audit, Zoom Out" Protocol
+
+When an experiment fails, a test breaks, or an optimization stalls, **NEVER engage in reactionary micro-patching or shotgun tweaking**. Immediately execute this three-step protocol:
+
+1. **STOP (Halt & Clean Reset)**:
+   - Freeze all code changes immediately. Resist the urge to "just tweak one more line".
+   - Run `git restore .` to revert to the last verified baseline. Never construct further changes on top of a compromised or unproven state.
+   - Break the thrashing loop: recognize that repetitive minor failures signal a flawed causal model, not a parameter tuning issue.
+
+2. **AUDIT (Forensic Root Cause Analysis)**:
+   - **Audit Assumptions**: What implicit assumptions about data, timing, environment, or execution mechanics were violated?
+   - **Audit Mechanics**: Trace the data flow step-by-step. Is there an off-by-one index, hidden fee drag, leakage, or sampling bias?
+   - **Audit History**: Review the experiment ledger. Have we attempted a variant of this before? What did we learn?
+
+3. **ZOOM OUT (Macro Architectural Shift)**:
+   - **Question the Framing**: Are we trying to squeeze juice from a dry lemon? (e.g., trying to optimize a 5-minute scalper where exchange fees mathematically guarantee negative expectancy).
+   - **Step Back to First Principles**: What is the structural driver of the underlying system? What natural asymmetry or constraint exists that we are ignoring?
+   - **Reframe at the System Level**: Move from micro-parameter tuning to macro-systemic redesign (e.g., shifting timeframes, expanding asset universe, filtering macro regimes, or rethinking risk allocation).
+
+4. **Document in Ledger**:
+   - Record the failed hypothesis, empirical delta, and the "Audit & Zoom Out" diagnostic in the project's experiment ledger. A documented negative result prevents repeating the same dead end.
 
 ---
 
