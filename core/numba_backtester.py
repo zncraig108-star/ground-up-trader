@@ -424,6 +424,8 @@ def _kernel(o, h, l, c, fund_rate, sig_regime, sig_atr, sig_long, sig_short, sig
 
                 if can_pyr:
                     pyr_qty = math.floor(abs(pos) * pyr_mult / lot + 1e-9) * lot
+                    lev_room = math.floor(max(cash * levp / cc - abs(pos), 0.0) / lot + 1e-9) * lot
+                    pyr_qty = min(pyr_qty, lev_room)
                     if pyr_qty > 0.0:
                         pyr_side = 1.0 if pos > 0.0 else -1.0
                         pyr_px = cc + slip_taker if pyr_side > 0.0 else cc - slip_taker

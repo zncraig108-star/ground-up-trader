@@ -137,7 +137,7 @@ class PortfolioConfig:
     allow_alt_shorts: bool = False  # Long-only on alts; shorts restricted to BTC/ETH macro hedges
     allow_bear_shorts: bool = False  # 100% Cash in Bear (BTC < 200d SMA), eliminating bear market drawdowns
     require_asset_ema50_filter: bool = True  # Require price > 50d EMA & positive slope
-    idle_cash_yield_apr: float = 0.18  # 18% APR delta-neutral perp basis yield on idle cash
+    idle_cash_yield_apr: float = 0.05  # realistic USDC yield (18% synthetic basis yield removed: banned)
     max_concurrent_leaders: int = 2  # Focus capital on Top 2 Relative Strength leaders
     momentum_lookback_bars: int = 180  # 30 days = 180 * 4h bars for RS ranking
     macro_btc_sma_bars: int = 1200  # 200 days = 1200 * 4h bars for BTC macro regime filter

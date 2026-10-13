@@ -737,12 +737,15 @@ class EvolutionEngine:
             genome = np.asarray([e["genome"] for e in entries], dtype=np.float64)
             entry_sigs = [self._get_candidate_signals(e) for e in entries]
             # Each candidate's cached full-history signals is sliced, then backtested together.
+            has_bk = all(s.is_breakout is not None and s.breakout_price is not None for s in entry_sigs)
             signals = SignalIntents(
                 regime=xp.concatenate([s.regime for s in entry_sigs]),
                 atr=xp.concatenate([s.atr for s in entry_sigs]),
                 long_entry=xp.concatenate([s.long_entry for s in entry_sigs]),
                 short_entry=xp.concatenate([s.short_entry for s in entry_sigs]),
                 entry_price=xp.concatenate([s.entry_price for s in entry_sigs]),
+                is_breakout=xp.concatenate([s.is_breakout for s in entry_sigs]) if has_bk else None,
+                breakout_price=xp.concatenate([s.breakout_price for s in entry_sigs]) if has_bk else None,
             )
             sig = self._slice_signals(signals, np.arange(len(entries)), start, end)
             res = backtest(self.ohlcv_1m.iloc[start * 60:end * 60], self.ohlcv_1h.iloc[start:end],
