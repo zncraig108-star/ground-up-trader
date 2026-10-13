@@ -558,6 +558,9 @@ def backtest(
         if bool(asnumpy(xp.any(can_pyr))):
             pyr_pct = xp.where(can_pyr1, 0.35, 0.25)
             pyr_qty = xp.floor(xp.abs(sim.pos) * pyr_pct / lot + 1e-9) * lot
+            # Same cash*leverage notional bound as the initial entry.
+            lev_room = xp.floor(xp.maximum(sim.cash * leverage / c - xp.abs(sim.pos), 0.0) / lot + 1e-9) * lot
+            pyr_qty = xp.minimum(pyr_qty, lev_room)
             valid_pyr = can_pyr & (pyr_qty > 0)
             if bool(asnumpy(xp.any(valid_pyr))):
                 pyr_side = xp.sign(sim.pos)
