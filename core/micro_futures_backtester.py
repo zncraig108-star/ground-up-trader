@@ -331,8 +331,8 @@ def backtest_micro_futures(
                     add_cnt = int(excess // cfg.compounding_tier_step)
                     base_contracts = 1 if is_defensive else (1 + add_cnt)
 
-                    tradable = ["SOL-PERP", "ETH-PERP"]
-                    if current_equity >= 1000.0:
+                    tradable = [p for p in ["SOL-PERP", "ETH-PERP"] if p in universe]
+                    if current_equity >= 1000.0 and "BTC-PERP" in universe:
                         tradable.append("BTC-PERP")
 
                     # Relative strength momentum ranking (20-day return)

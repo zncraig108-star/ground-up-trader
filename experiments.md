@@ -305,3 +305,34 @@ Goal remains OPEN. Untried: funding/basis and futures-specific data, maker-fill 
 - With real historical price action (SOL +4.3x, BTC +1.85x, ETH +1.13x), 1-2 contracts of directional trend following generates between +$400 and +$700 of net directional PnL. Combined with ~$160 of realistic 5% APY USDC yield on idle margin, the honest mathematical ceiling for capital preservation (0.00% deposit DD) is **2.43x ($1,215.60)**.
 - Reaching 10x ($5,000) from $500 with zero lookahead would require +$4,500 in net gains. Across 1-2 contracts, this would require SOL or ETH to appreciate 20x-30x during the period, or would require taking 40%-60% deposit drawdowns with >5x offshore leverage, which violates NYS CFTC regulations.
 
+---
+
+## [H-013] Argon Architectural Audit & Feasibility Verification
+- **Date**: 2026-10-13
+- **Target Subsystem**: `core/evolution.py`, `core/backtester.py`, `core/numba_backtester.py`, `config.py`, `core/micro_futures_backtester.py`
+- **Status**: VERIFIED & RESOLVED (Code Fixes Applied; Infeasible Allocations Rejected)
+
+### 1. Hypothesis Formulation
+- **Empirical Observation**: An external audit (`argon_analysis.txt`) identified five potential codebase bugs and proposed a 4-tranche multi-leader Kelly allocation claiming 69.89% CAGR ($500 $\to$ $8,500).
+- **Forensic Root Cause Analysis**:
+  - **Valid Code Fix 1**: `core/evolution.py` omitted `is_breakout` and `breakout_price` in `_evaluate_forward_validation` signal concatenation, dropping breakout state during walk-forward slicing.
+  - **Valid Code Fix 2**: `core/backtester.py` and `core/numba_backtester.py` lacked notional margin bounds on pyramiding additions, allowing potential leverage creep.
+  - **Valid Code Fix 3**: `PortfolioConfig.idle_cash_yield_apr` remained at 0.18 (18% synthetic basis yield), violating the 5% USDC realistic yield mandate.
+  - **Valid Code Fix 4**: `core/micro_futures_backtester.py` hardcoded tradable assets as `["SOL-PERP", "ETH-PERP"]`, throwing `KeyError` when running backtests on asset subsets.
+  - **Infeasible Claim 1 ("10-day Exit Inversion")**: Reverting `exit_lookback_days` from 22d to 10d degrades OOS performance to 0.93x–0.95x due to crypto shakeout wicks.
+  - **Infeasible Claim 2 ("69.89% CAGR via 4-Tranche Kelly")**: The claimed 70% CAGR relies on continuous fractional contract sizing across 9 offshore perp assets with 1.9x gross leverage. On a $500 NYS account with whole integer contracts (SOL $150, MET $300, BTI $600) and a $450 soft floor ($50 risk cushion), multi-leader tranche sizing cannot be physically executed without instant floor breach.
+
+### 2. Empirical Verification
+- **Code Fixes Applied**:
+  - `core/evolution.py`: Breakout fields preserved in validation signal concatenation.
+  - `core/backtester.py` & `core/numba_backtester.py`: Clamped `pyr_qty = min(pyr_qty, lev_room)`.
+  - `config.py`: Set `idle_cash_yield_apr = 0.05`.
+  - `core/micro_futures_backtester.py`: Filtered `tradable` by active `universe`.
+- **Demo & Invariant Suite**: `python run_demo.py --no-serve` passed with 100% self-checks (causality, post-only fills, fee/funding signs, liquidation, JIT vs XP parity, replay drift).
+- **Micro Comparison Verification**:
+  - 1h Intraday Baseline [H-012]: $500 $\to$ **$1,215.60 (2.43x)**
+  - Initial Deposit Drawdown: **0.00%** (Min Equity: $500.00)
+  - Trades: 273 (52 trades/year, WR 45.4%)
+  - Out-of-Sample (2024+): **1.27x**
+
+
